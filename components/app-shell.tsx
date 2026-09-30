@@ -4,7 +4,7 @@ import { usePathname } from "next/navigation";
 import { LogOut, User } from "lucide-react";
 import { navFor } from "@/lib/nav";
 import { cn } from "@/lib/utils";
-import { BrandMark } from "@/components/brand-mark";
+import { Logo } from "@/components/logo";
 import { Button } from "@/components/ui/button";
 import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuLabel, DropdownMenuSeparator, DropdownMenuTrigger } from "@/components/ui/dropdown-menu";
 import { logoutAction } from "@/app/(app)/actions";
@@ -33,8 +33,8 @@ export function AppShell({ name, mob, tag, children }: { name: string; mob: stri
 
   const Brand = (
     <Link href="/" className="flex shrink-0 items-center gap-2.5 font-display text-lg font-semibold tracking-tight">
-      <BrandMark className="size-8" />
-      FOLK Tracker
+      <Logo tile className="h-11 w-16" />
+      Tracker
     </Link>
   );
 

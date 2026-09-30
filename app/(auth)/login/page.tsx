@@ -2,7 +2,7 @@
 import { useActionState, useEffect, useState } from "react";
 import { useRouter } from "next/navigation";
 import { Eye, EyeOff, Loader2 } from "lucide-react";
-import { BrandMark } from "@/components/brand-mark";
+import { Logo } from "@/components/logo";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
@@ -20,7 +20,7 @@ export default function LoginPage() {
   return (
     <Card className="w-full max-w-sm shadow-xl shadow-primary/5">
       <CardHeader className="items-center text-center">
-        <span className="mb-2 grid size-16 place-items-center rounded-full bg-primary"><BrandMark className="size-11" /></span>
+        <Logo className="mx-auto mb-1 h-28" />
         <p className="text-xs font-medium uppercase tracking-[0.2em] text-muted-foreground">Hare Krishna</p>
         <CardTitle className="font-display text-2xl">FOLK Tracker</CardTitle>
         <CardDescription>{creating ? "First time? Choose a password" : "Sign in with your mobile number"}</CardDescription>
