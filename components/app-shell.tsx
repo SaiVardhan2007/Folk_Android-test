@@ -1,25 +1,33 @@
 "use client";
 import Link from "next/link";
 import { usePathname } from "next/navigation";
-import { LogOut, User } from "lucide-react";
+import { useTransition } from "react";
+import { Loader2, LogOut, User } from "lucide-react";
 import { navFor } from "@/lib/nav";
 import { cn } from "@/lib/utils";
 import { Logo } from "@/components/logo";
 import { Button } from "@/components/ui/button";
-import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuLabel, DropdownMenuSeparator, DropdownMenuTrigger } from "@/components/ui/dropdown-menu";
+import { DropdownMenu, DropdownMenuContent, DropdownMenuGroup, DropdownMenuItem, DropdownMenuLabel, DropdownMenuSeparator, DropdownMenuTrigger } from "@/components/ui/dropdown-menu";
 import { logoutAction } from "@/app/(app)/actions";
 
 // `className` lets each placement size the trigger: full width in the sidebar, natural width in the phone header.
 function UserMenu({ name, mob, tag, className }: { name: string; mob: string; tag: string; className?: string }) {
+  const [pending, start] = useTransition();
   return (
     <DropdownMenu>
       <DropdownMenuTrigger render={<Button variant="ghost" size="sm" className={cn("gap-2 text-sidebar-foreground hover:bg-sidebar-accent hover:text-sidebar-foreground", className)} />}>
         <User className="shrink-0" /> <span className="max-w-32 truncate">{name}</span>
       </DropdownMenuTrigger>
       <DropdownMenuContent align="end" className="w-56">
-        <DropdownMenuLabel className="font-normal"><div className="font-medium">{name} <span className="text-xs font-normal text-muted-foreground">· {tag}</span></div><div className="truncate text-xs text-muted-foreground">{mob}</div></DropdownMenuLabel>
+        {/* the label is a group label, so it must live inside a group or the menu crashes when opened */}
+        <DropdownMenuGroup>
+          <DropdownMenuLabel className="font-normal"><div className="font-medium">{name} <span className="text-xs font-normal text-muted-foreground">· {tag}</span></div><div className="truncate text-xs text-muted-foreground">{mob}</div></DropdownMenuLabel>
+        </DropdownMenuGroup>
         <DropdownMenuSeparator />
-        <DropdownMenuItem onClick={() => logoutAction()}><LogOut /> Log out</DropdownMenuItem>
+        {/* stay open while signing out so the spinner is visible */}
+        <DropdownMenuItem closeOnClick={false} disabled={pending} onClick={() => start(() => logoutAction())}>
+          {pending ? <Loader2 className="animate-spin" /> : <LogOut />} {pending ? "Signing out…" : "Log out"}
+        </DropdownMenuItem>
       </DropdownMenuContent>
     </DropdownMenu>
   );

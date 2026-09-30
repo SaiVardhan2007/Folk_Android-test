@@ -1,7 +1,6 @@
 // Shared by the Admin People page and its CSV export: turns URL params into a validated query.
 import { GENDERS } from "@/lib/genders";
 import { LEVELS } from "@/lib/levels";
-import { TAGS } from "@/lib/roles";
 
 export const PAGE_SIZE = 25;
 const GENDER_VALUES = GENDERS.map((g) => g.value);
@@ -32,7 +31,7 @@ export const validDate = (v: string) => (DATE.test(v) ? v : "");
 export function parsePeopleQuery(sp: SearchParams): PeopleQuery {
   const sort = one(sp.sort);
   return {
-    q: one(sp.q).trim(), tag: pick(one(sp.tag), TAGS), level: pick(one(sp.level), LEVELS), gender: pick(one(sp.gender), GENDER_VALUES),
+    q: one(sp.q).trim(), tag: one(sp.tag).trim(), level: pick(one(sp.level), LEVELS), gender: pick(one(sp.gender), GENDER_VALUES),
     event: one(sp.event).trim(), pw: pick(one(sp.pw), ["set", "unset"]), att: pick(one(sp.att), ["yes", "no"]),
     from: validDate(one(sp.from)), to: validDate(one(sp.to)),
     sort: sort in SORTS ? (sort as keyof typeof SORTS) : "newest",

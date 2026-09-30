@@ -1,7 +1,9 @@
+import { Suspense } from "react";
 import type { Metadata, Viewport } from "next";
 import { Figtree, Fraunces } from "next/font/google";
 import { cn } from "@/lib/utils";
 import { Toaster } from "@/components/ui/sonner";
+import { RouteProgress } from "@/components/route-progress";
 import RegisterSW from "./register-sw";
 import "./globals.css";
 
@@ -14,7 +16,8 @@ export const viewport: Viewport = { width: "device-width", initialScale: 1, them
 export default function RootLayout({ children }: { children: React.ReactNode }) {
   return (
     <html lang="en" className={cn("font-sans", sans.variable, display.variable)}>
-      <body className="min-h-screen bg-background text-foreground antialiased">
+      <body suppressHydrationWarning className="min-h-screen bg-background text-foreground antialiased">
+        <Suspense fallback={null}><RouteProgress /></Suspense>
         {children}
         <Toaster position="top-center" richColors />
         <RegisterSW />

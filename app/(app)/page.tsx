@@ -1,7 +1,7 @@
 import Link from "next/link";
 import { ArrowRight } from "lucide-react";
 import { requireSession } from "@/lib/auth";
-import { countAttendance, countRegistrations, currentEvent } from "@/lib/erpnext";
+import { countAttendance, countRegistrations, currentEvent, listEvents } from "@/lib/erpnext";
 import { navFor } from "@/lib/nav";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { PageHeader } from "@/components/page-header";
@@ -13,8 +13,9 @@ async function stats() {
   try {
     const event = await currentEvent();
     if (!event) return { hint: "No current event is set. Set one in ERPNext > FOLK Settings." };
-    const [registered, attended] = await Promise.all([countRegistrations(event), countAttendance(event)]);
-    return { event, registered, attended };
+    const [registered, attended, events] = await Promise.all([countRegistrations(event), countAttendance(event), listEvents()]);
+    // show the event's name, not its code
+    return { event: events.find((e) => e.name === event)?.event_name ?? event, registered, attended };
   } catch {
     return { hint: "Couldn't load numbers from ERPNext." };
   }

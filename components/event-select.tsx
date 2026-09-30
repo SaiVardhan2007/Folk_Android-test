@@ -4,7 +4,7 @@ import type { Event } from "@/lib/erpnext";
 
 /** Event dropdown. Used on Register, Attendance and Reports. */
 export function EventSelect({ events, value, onChange }: { events: Event[]; value?: string; onChange?: (v: string) => void }) {
-  const items = events.map((e) => ({ value: e.name, label: `${e.event_name} (${e.name})` }));
+  const items = events.map((e) => ({ value: e.name, label: e.event_name }));
   return (
     <Select items={items} value={value} onValueChange={(v) => v && onChange?.(v)}>
       <SelectTrigger className="h-10 w-full"><SelectValue placeholder="Select event" /></SelectTrigger>

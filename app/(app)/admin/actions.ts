@@ -2,8 +2,8 @@
 
 import { revalidatePath } from "next/cache";
 import { requireAdmin } from "@/lib/auth";
-import { listEvents, resetPassword, setCurrentEvent, setTag } from "@/lib/erpnext";
-import { TAGS, type Tag } from "@/lib/roles";
+import { MAIN_ADMIN_MOB } from "@/lib/roles";
+import { getTagOptions, listEvents, resetPassword, setCurrentEvent, setTag } from "@/lib/erpnext";
 import type { Result } from "@/lib/result";
 
 // Admin-only mutations. Each action re-checks requireAdmin(): the layout check doesn't cover server actions.
@@ -22,9 +22,10 @@ async function save(fn: () => Promise<unknown>, message: string): Promise<Result
 
 export async function setTagAction(mob: string, tag: string): Promise<Result> {
   const me = await requireAdmin();
-  if (!(TAGS as readonly string[]).includes(tag)) return { ok: false, message: "Unknown tag." };
+  if (!(await getTagOptions()).includes(tag)) return { ok: false, message: "Unknown tag." };
+  if (mob === MAIN_ADMIN_MOB) return { ok: false, message: "The main admin's tag can only be changed in ERPNext." };
   if (mob === me.mob) return { ok: false, message: "You can't change your own tag." };
-  return save(() => setTag(mob, tag as Tag), "Tag updated.");
+  return save(() => setTag(mob, tag), "Tag updated.");
 }
 
 export async function resetPasswordAction(mob: string): Promise<Result> {

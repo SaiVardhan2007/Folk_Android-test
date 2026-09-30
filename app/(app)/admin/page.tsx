@@ -2,11 +2,10 @@ import type { Metadata } from "next";
 import Link from "next/link";
 import { ChevronLeft, ChevronRight, Download, X } from "lucide-react";
 import { requireAdmin } from "@/lib/auth";
-import { currentEvent, listEvents, queryPeople } from "@/lib/erpnext";
+import { currentEvent, getTagOptions, listEvents, queryPeople } from "@/lib/erpnext";
 import { PAGE_SIZE, parsePeopleQuery, SORTS, toParams, type SearchParams } from "@/lib/admin-query";
 import { GENDERS } from "@/lib/genders";
 import { LEVELS } from "@/lib/levels";
-import { TAGS } from "@/lib/roles";
 import { AutoForm } from "@/components/auto-form";
 import { FilterDate, FilterInput, FilterPill } from "@/components/filter-field";
 import { buttonVariants } from "@/components/ui/button";
@@ -19,7 +18,7 @@ export const metadata: Metadata = { title: "Admin" };
 export const dynamic = "force-dynamic";
 
 export default async function AdminPage({ searchParams }: { searchParams: Promise<SearchParams> }) {
-  const [me, sp, events, current] = await Promise.all([requireAdmin(), searchParams, listEvents(), currentEvent()]);
+  const [me, sp, events, current, tags] = await Promise.all([requireAdmin(), searchParams, listEvents(), currentEvent(), getTagOptions()]);
   const q = parsePeopleQuery(sp);
   const { people, total } = await queryPeople(q);
   const pages = Math.max(1, Math.ceil(total / PAGE_SIZE));
@@ -38,7 +37,7 @@ export default async function AdminPage({ searchParams }: { searchParams: Promis
           <CurrentEventPicker events={events} current={current} />
         </div>
         <div className="-mx-4 flex gap-2 overflow-x-auto px-4 pb-1 sm:mx-0 sm:flex-wrap sm:px-0">
-          <FilterPill name="tag" label="Tag" value={q.tag} options={TAGS} />
+          <FilterPill name="tag" label="Tag" value={q.tag} options={tags} />
           <FilterPill name="level" label="Level" value={q.level} options={LEVELS} />
           <FilterPill name="gender" label="Gender" value={q.gender} options={GENDERS} />
           <FilterPill name="event" label="Event" value={q.event} options={events.map((e) => ({ value: e.name, label: e.event_name }))} />
@@ -58,7 +57,7 @@ export default async function AdminPage({ searchParams }: { searchParams: Promis
       </div>
       {people.length === 0
         ? <Card><CardContent className="py-8 text-center text-muted-foreground">No one matches these filters.</CardContent></Card>
-        : <PeopleList people={people} myMob={me.mob} />}
+        : <PeopleList people={people} myMob={me.mob} tags={tags} />}
 
       {pages > 1 && (
         <nav aria-label="Pages" className="mt-4 flex items-center justify-between gap-3">

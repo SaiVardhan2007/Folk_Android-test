@@ -1,7 +1,7 @@
 // Admin analytics: everything is computed from FOLK Users (people) and their attendance child rows.
 // Fine for thousands of people; if it ever grows past that, move the grouping into an ERPNext report.
 import { LEVELS } from "@/lib/levels";
-import { TAGS } from "@/lib/roles";
+import { getTagOptions } from "./users";
 import { erp, list, qs } from "./client";
 
 export type AnalyticsFilters = { from: string; to: string; event: string; level: string; gender: string };
@@ -66,7 +66,8 @@ export async function getAnalytics(f: AnalyticsFilters): Promise<Analytics> {
   if (f.to) rowFilters.push(["attendance_date", "<=", f.to]);
   if (f.event) rowFilters.push(["event_code", "=", f.event]);
 
-  const [everyone, rowsRes] = await Promise.all([
+  const [tags, everyone, rowsRes] = await Promise.all([
+    getTagOptions(),
     list<P>("FOLK Users", ["mob_no", "full_name", "gender", "level", "pg_name", "profession", "event_code", "user_tag", "registered_by", "creation"], []),
     erp("GET", `/api/method/frappe.client.get_list?${qs({
       doctype: "FOLK Users Attendance", parent: "FOLK Users", fields: ["parent", "event_code", "attendance_date", "marked_by"], filters: rowFilters, limit_page_length: 0,
@@ -100,7 +101,7 @@ export async function getAnalytics(f: AnalyticsFilters): Promise<Analytics> {
     },
     byLevel: breakdown(scope, rows, (p) => p.level || NONE, LEVELS),
     byGender: breakdown(scope, rows, (p) => ({ M: "Male", F: "Female" })[p.gender ?? ""] ?? NONE, ["Male", "Female"]),
-    byTag: breakdown(scope, rows, (p) => p.user_tag || "People", TAGS),
+    byTag: breakdown(scope, rows, (p) => p.user_tag || "People", tags),
     byEvent: breakdown(scope, rows, (p) => p.event_code || NONE, []).sort((a, b) => b.checkins - a.checkins),
     frequency: [
       { label: "Came once", value: freq(1) }, { label: "Twice", value: freq(2) }, { label: "3 times", value: freq(3) }, { label: "4 or more", value: freq(4) },

@@ -1,7 +1,7 @@
 // App accounts live on the person's FOLK Users: the mobile number is the login ID, password_hash holds the
 // PBKDF2 hash (never the password) and user_tag holds their tag.
 import { docPath, erp, getDoc, list } from "./client";
-import { asTag, type Tag } from "@/lib/roles";
+import { asTag, DEFAULT_TAGS, type Tag } from "@/lib/roles";
 import { hashPassword, verifyPassword } from "@/lib/password";
 import { normalizeMobile } from "@/lib/utils";
 import { PAGE_SIZE, peopleFilters, searchFilters, SORTS, type PeopleQuery } from "@/lib/admin-query";
@@ -82,6 +82,19 @@ export async function queryPeople(q: PeopleQuery): Promise<{ people: Person[]; t
       last_attended_on: r.last_attended_on ?? "", creation: (r.creation ?? "").slice(0, 10),
     })),
   };
+}
+
+/** Tags defined on the user_tag field in ERPNext, in the order set there. Falls back to the defaults if unreachable. */
+export async function getTagOptions(): Promise<string[]> {
+  try {
+    const r = await erp("GET", docPath("DocType", DOCTYPE));
+    const field = (r.data.fields as { fieldname: string; options?: string }[]).find((f) => f.fieldname === "user_tag");
+    const opts = (field?.options ?? "").split("\n").map((o) => o.trim()).filter(Boolean);
+    return opts.length ? opts : DEFAULT_TAGS;
+  } catch (e) {
+    console.error(e);
+    return DEFAULT_TAGS;
+  }
 }
 
 export const setTag = (mob: string, tag: Tag) => erp("PUT", userPath(mob), { user_tag: tag });

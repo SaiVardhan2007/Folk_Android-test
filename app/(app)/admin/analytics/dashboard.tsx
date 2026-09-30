@@ -80,7 +80,7 @@ export function Dashboard({ a, events, today, from, to, event, level, gender, sh
       {shown.has("level") && <Panel title="By level"><BreakdownTable rows={a.byLevel} firstColumn="Level" /></Panel>}
       {shown.has("gender") && <Panel title="By gender"><BreakdownTable rows={a.byGender} firstColumn="Gender" /></Panel>}
       {shown.has("tag") && <Panel title="By tag"><BreakdownTable rows={a.byTag} firstColumn="Tag" /></Panel>}
-      {shown.has("event") && <Panel title="By event" description="People registered for each event, and how many showed up."><BreakdownTable rows={a.byEvent} firstColumn="Event" /></Panel>}
+      {shown.has("event") && <Panel title="By event" description="People registered for each event, and how many showed up."><BreakdownTable rows={a.byEvent.map((r) => ({ ...r, key: events.find((e) => e.name === r.key)?.event_name ?? r.key }))} firstColumn="Event" /></Panel>}
       {shown.has("freq") && <Panel title="How often people come" description="People by number of check-ins in this period."><BarList items={a.frequency} /></Panel>}
       {shown.has("weekday") && <Panel title="Check-ins by weekday"><BarList items={a.weekday} /></Panel>}
       {shown.has("top") && <Panel title="Most regular attendees" description="Top 10 by check-ins in this period."><BarList items={a.topAttendees} /></Panel>}
