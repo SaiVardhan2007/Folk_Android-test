@@ -4,5 +4,9 @@
   "main": ".open-next/worker.js",
   "compatibility_date": "2026-09-01",
   "compatibility_flags": ["nodejs_compat", "global_fetch_strictly_public"],
-  "assets": { "binding": "ASSETS", "directory": ".open-next/assets" }
+  "assets": { "binding": "ASSETS", "directory": ".open-next/assets" },
+  // Keep Workers Logs on so login/ERPNext errors can be read in the dashboard (Observability tab).
+  "observability": {
+    "logs": { "enabled": true, "head_sampling_rate": 1, "invocation_logs": true, "persist": true }
+  }
 }

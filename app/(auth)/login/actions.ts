@@ -13,7 +13,8 @@ async function run(fn: () => ReturnType<typeof verifyLogin>): Promise<Result> {
     if (!r.ok) return r;
     await createSession(r.user);
   } catch (e) {
-    console.error(e);
+    // Log the message as text: on Cloudflare, logging the Error object alone prints only the stack, not what went wrong.
+    console.error("login failed:", e instanceof Error ? `${e.name}: ${e.message}` : String(e));
     return { ok: false, message: "Couldn't reach the server. Try again." };
   }
   return { ok: true, message: "Signed in" };
