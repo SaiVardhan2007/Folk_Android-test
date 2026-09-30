@@ -1,0 +1,24 @@
+{
+  "doctype": "DocType",
+  "name": "FOLK Settings",
+  "module": "Custom",
+  "custom": 1,
+  "issingle": 1,
+  "fields": [
+    {
+      "fieldname": "current_event",
+      "label": "Current Event",
+      "fieldtype": "Link",
+      "options": "FOLK Event",
+      "description": "Default event selected on the Register and Attendance screens."
+    }
+  ],
+  "permissions": [
+    {
+      "role": "System Manager",
+      "read": 1,
+      "write": 1,
+      "create": 1
+    }
+  ]
+}
