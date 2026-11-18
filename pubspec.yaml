@@ -70,6 +70,7 @@ flutter:
 
   assets:
     - assets/images/folk_logo.png
+    - assets/images/folk_receipt_logo.webp
 
   fonts:
     - family: Poppins
