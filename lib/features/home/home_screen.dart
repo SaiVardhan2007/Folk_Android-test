@@ -7,6 +7,8 @@ import '../../core/api.dart';
 import '../../core/theme.dart';
 import '../../core/util.dart';
 import '../../core/widgets.dart';
+import '../admin/admin_repo.dart';
+import '../admin/link_card.dart';
 import '../auth/auth_controller.dart';
 import '../../core/layout.dart';
 
@@ -18,6 +20,9 @@ final homeStatsProvider = StreamProvider.autoDispose.family<({int registered, in
     query: {'event': event},
   );
 });
+
+/// Registration links assigned to the signed-in staff member (empty for most people).
+final myLinksProvider = FutureProvider.autoDispose<List<Map<String, dynamic>>>((ref) => ref.read(adminRepoProvider).myLinks());
 
 class HomeScreen extends ConsumerStatefulWidget {
   const HomeScreen({super.key});
@@ -52,10 +57,12 @@ class _HomeScreenState extends ConsumerState<HomeScreen> with WidgetsBindingObse
     final boot = ref.watch(bootstrapProvider);
     final event = ref.watch(selectedEventProvider);
     final stats = event == null ? null : ref.watch(homeStatsProvider(event));
+    final myLinks = (me?.isStaff ?? false) ? (ref.watch(myLinksProvider).value ?? const <Map<String, dynamic>>[]) : const <Map<String, dynamic>>[];
 
     return PageBody(
       onRefresh: () async {
         ref.invalidate(bootstrapProvider);
+        ref.invalidate(myLinksProvider);
         if (event != null) ref.invalidate(homeStatsProvider(event));
       },
       children: [
@@ -113,6 +120,14 @@ class _HomeScreenState extends ConsumerState<HomeScreen> with WidgetsBindingObse
               _ActionTile(icon: Icons.admin_panel_settings_outlined, title: 'Admin', subtitle: 'People, calls, analytics, settings', route: '/admin'),
           ],
         ),
+        if (myLinks.isNotEmpty) ...[
+          const SectionTitle('Your registration links'),
+          for (final l in myLinks)
+            Padding(
+              padding: const EdgeInsets.only(bottom: kGapS),
+              child: LinkCard(link: l),
+            ),
+        ],
       ],
     );
   }

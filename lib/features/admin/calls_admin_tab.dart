@@ -1,4 +1,5 @@
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import '../../core/api.dart';
@@ -10,6 +11,26 @@ import 'admin_repo.dart';
 import '../../core/layout.dart';
 
 final _callersProvider = FutureProvider.autoDispose<List<Map<String, dynamic>>>((ref) => ref.read(adminRepoProvider).callers());
+
+/// Which event or contact list the admin is working on in this tab (kept apart from the Home/Attendance event).
+class _CallTarget extends Notifier<String?> {
+  String? _picked;
+  @override
+  String? build() {
+    final boot = ref.watch(bootstrapProvider).value;
+    final all = boot?.eventsAndLists ?? const <FolkEvent>[];
+    final p = _picked;
+    if (p != null && all.any((e) => e.code == p)) return p;
+    return boot?.currentEvent;
+  }
+
+  void select(String code) {
+    _picked = code;
+    state = code;
+  }
+}
+
+final _callTargetProvider = NotifierProvider<_CallTarget, String?>(_CallTarget.new);
 final _statsProvider = FutureProvider.autoDispose.family<Map<String, dynamic>, String>((ref, event) => ref.read(adminRepoProvider).callStats(event));
 
 /// Admin → Calls: who is calling, assigning contacts to coordinators, follow-ups, message text and call statistics.
@@ -58,7 +79,7 @@ class CallsAdminTab extends ConsumerWidget {
   @override
   Widget build(BuildContext context, WidgetRef ref) {
     final text = Theme.of(context).textTheme;
-    final event = ref.watch(selectedEventProvider);
+    final event = ref.watch(_callTargetProvider);
     final boot = ref.watch(bootstrapProvider).value;
     final callers = ref.watch(_callersProvider);
     final repo = ref.read(adminRepoProvider);
@@ -66,7 +87,26 @@ class CallsAdminTab extends ConsumerWidget {
     return PageBody(
       onRefresh: () async => _refresh(ref),
       children: [
-        const EventPicker(label: 'Calls for event'),
+        if (boot != null && (boot.eventsAndLists.isNotEmpty))
+          DropdownButtonFormField<String>(
+            key: ValueKey(event),
+            initialValue: boot.eventsAndLists.any((e) => e.code == event) ? event : boot.eventsAndLists.first.code,
+            isExpanded: true,
+            decoration: const InputDecoration(labelText: 'Calls for', prefixIcon: Icon(Icons.event_outlined)),
+            items: [
+              for (final e in boot.events)
+                DropdownMenuItem(
+                  value: e.code,
+                  child: Text(e.name, overflow: TextOverflow.ellipsis),
+                ),
+              for (final e in boot.lists)
+                DropdownMenuItem(
+                  value: e.code,
+                  child: Text('${e.name} (list)', overflow: TextOverflow.ellipsis),
+                ),
+            ],
+            onChanged: (v) => v == null ? null : ref.read(_callTargetProvider.notifier).select(v),
+          ),
         const SizedBox(height: 14),
         Wrap(
           spacing: 10,
@@ -263,6 +303,7 @@ class CallsAdminTab extends ConsumerWidget {
         content: TextField(
           controller: ctl,
           keyboardType: TextInputType.number,
+          inputFormatters: [FilteringTextInputFormatter.digitsOnly, LengthLimitingTextInputFormatter(4)],
           autofocus: true,
           decoration: const InputDecoration(helperText: 'Most contacts they can be given. Leave empty for no limit.'),
         ),
@@ -297,7 +338,7 @@ class _AssignSheet extends ConsumerStatefulWidget {
 
 class _AssignSheetState extends ConsumerState<_AssignSheet> {
   String _level = '', _gender = '', _attended = '', _reg = '';
-  bool _reassign = false, _busy = false;
+  bool _busy = false;
   late final Set<String> _picked = {
     for (final c in widget.callers)
       if (c['auto_assign'] == true) '${c['mob']}',
@@ -311,7 +352,6 @@ class _AssignSheetState extends ConsumerState<_AssignSheet> {
     'attended': _attended,
     'reg_event': _reg,
     'coordinators': _picked.toList(),
-    'reassign_unfinished': _reassign,
   };
 
   Future<void> _go({required bool preview}) async {
@@ -354,8 +394,8 @@ class _AssignSheetState extends ConsumerState<_AssignSheet> {
             OptionDropdown(
               label: 'Registered for event',
               value: _reg,
-              options: [for (final e in b?.events ?? <FolkEvent>[]) e.code],
-              labelOf: (c) => b!.events.firstWhere((e) => e.code == c).name,
+              options: [for (final e in b?.eventsAndLists ?? <FolkEvent>[]) e.code],
+              labelOf: (c) => b!.eventsAndLists.firstWhere((e) => e.code == c).name,
               onChanged: (v) => changed(() => _reg = v),
             ),
             OptionDropdown(label: 'Level', value: _level, options: b?.levels ?? const [], onChanged: (v) => changed(() => _level = v)),
@@ -375,12 +415,11 @@ class _AssignSheetState extends ConsumerState<_AssignSheet> {
             ),
           ],
         ),
-        SwitchListTile(
-          contentPadding: EdgeInsets.zero,
-          value: _reassign,
-          onChanged: (v) => changed(() => _reassign = v),
-          title: const Text('Also redistribute calls nobody has started'),
+        Text(
+          'Assigning replaces the earlier contacts of the coordinators you pick. Their call history is kept.',
+          style: text.bodyMedium,
         ),
+        const SizedBox(height: kGapS),
         Text('Coordinators', style: text.titleSmall),
         for (final c in widget.callers)
           CheckboxListTile(
@@ -399,6 +438,8 @@ class _AssignSheetState extends ConsumerState<_AssignSheet> {
                 crossAxisAlignment: CrossAxisAlignment.start,
                 children: [
                   Text('${_plan!['assignable']} of ${_plan!['pool']} matching contacts will be assigned', style: text.titleSmall),
+                  if (((_plan!['removed_previous'] as num?) ?? 0) > 0)
+                    Text('${_plan!['removed_previous']} earlier contact(s) of these coordinators will be removed', style: text.bodyMedium),
                   if ((_plan!['already_assigned'] as num) > 0)
                     Text('${_plan!['already_assigned']} already assigned for this event', style: text.bodyMedium),
                   if ((_plan!['unassigned'] as num) > 0)

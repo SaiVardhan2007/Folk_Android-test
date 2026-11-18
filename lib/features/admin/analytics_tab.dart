@@ -61,8 +61,8 @@ class _AnalyticsTabState extends ConsumerState<AnalyticsTab> with AutomaticKeepA
             OptionDropdown(
               label: 'Event',
               value: _event,
-              options: [for (final e in boot?.events ?? <FolkEvent>[]) e.code],
-              labelOf: (c) => boot!.events.firstWhere((e) => e.code == c).name,
+              options: [for (final e in boot?.eventsAndLists ?? <FolkEvent>[]) e.code],
+              labelOf: (c) => boot!.eventsAndLists.firstWhere((e) => e.code == c).name,
               onChanged: (v) => setState(() => _event = v),
             ),
             OptionDropdown(label: 'Level', value: _level, options: boot?.levels ?? const [], onChanged: (v) => setState(() => _level = v)),

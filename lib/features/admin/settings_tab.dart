@@ -2,6 +2,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import '../../core/api.dart';
+import '../../core/app_update.dart';
 import '../../core/widgets.dart';
 import '../../core/layout.dart';
 import '../../core/util.dart';
@@ -49,7 +50,7 @@ class SettingsTab extends ConsumerWidget {
             title: const Text('Activity log'),
             subtitle: const Text('Everything every user, coordinator and admin has done'),
             trailing: const Icon(Icons.chevron_right),
-            onTap: () => Navigator.of(context).push(MaterialPageRoute<void>(builder: (_) => const LogsScreen())),
+            onTap: () => Navigator.of(context, rootNavigator: true).push(MaterialPageRoute<void>(builder: (_) => const LogsScreen())),
           ),
         ),
         const SizedBox(height: 12),
@@ -122,6 +123,21 @@ class SettingsTab extends ConsumerWidget {
             onSave: (k, v) => _setText(context, ref, k, v),
           ),
         ],
+        const SizedBox(height: 16),
+        Text('App update', style: text.titleLarge),
+        const SizedBox(height: 4),
+        Text(
+          'After you release a new build, enter its build number as Latest: phones below it see an "Update available" pop-up they can dismiss. '
+          'For a critical fix, raise Minimum too: phones below it are blocked until they update.',
+          style: text.bodyMedium,
+        ),
+        const SizedBox(height: 12),
+        if (s.hasValue)
+          _UpdateEditor(
+            key: ValueKey('${s.value!['app_update']}'),
+            initial: AppUpdate.fromJson((s.value!['app_update'] as Map?)?.cast<String, dynamic>()),
+            onSaved: () => ref.invalidate(_settingsProvider),
+          ),
         const SizedBox(height: 16),
         Text('Receipt format', style: text.titleLarge),
         const SizedBox(height: 4),
@@ -323,4 +339,97 @@ class _ReceiptEditorState extends ConsumerState<_ReceiptEditor> {
       ),
     ),
   );
+}
+
+class _UpdateEditor extends ConsumerStatefulWidget {
+  const _UpdateEditor({super.key, required this.initial, required this.onSaved});
+  final AppUpdate initial;
+  final VoidCallback onSaved;
+
+  @override
+  ConsumerState<_UpdateEditor> createState() => _UpdateEditorState();
+}
+
+class _UpdateEditorState extends ConsumerState<_UpdateEditor> {
+  late final _latest = TextEditingController(text: widget.initial.latestBuild == 0 ? '' : '${widget.initial.latestBuild}');
+  late final _min = TextEditingController(text: widget.initial.minBuild == 0 ? '' : '${widget.initial.minBuild}');
+  late final _url = TextEditingController(text: widget.initial.url);
+  late final _msg = TextEditingController(text: widget.initial.message);
+  bool _busy = false;
+
+  @override
+  void dispose() {
+    _latest.dispose();
+    _min.dispose();
+    _url.dispose();
+    _msg.dispose();
+    super.dispose();
+  }
+
+  Future<void> _save() async {
+    setState(() => _busy = true);
+    try {
+      await ref.read(adminRepoProvider).saveSettings({
+        'app_update': {
+          'latest_build': int.tryParse(_latest.text.trim()) ?? 0,
+          'min_build': int.tryParse(_min.text.trim()) ?? 0,
+          'url': _url.text.trim(),
+          'message': _msg.text.trim(),
+        },
+      });
+      widget.onSaved();
+      if (mounted) showMessage(context, 'Update notice saved');
+    } on ApiException catch (e) {
+      if (mounted) showMessage(context, e.message, error: true);
+    } finally {
+      if (mounted) setState(() => _busy = false);
+    }
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final installed = ref.watch(installedBuildProvider).value;
+    return Card(
+      child: Padding(
+        padding: const EdgeInsets.all(kGapL),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            if (installed != null) Text('This phone is on build $installed', style: Theme.of(context).textTheme.bodyMedium),
+            const SizedBox(height: kGapS),
+            FieldGrid(
+              children: [
+                TextField(
+                  controller: _latest,
+                  keyboardType: TextInputType.number,
+                  decoration: const InputDecoration(labelText: 'Latest build', helperText: 'Asks to update (can dismiss)'),
+                ),
+                TextField(
+                  controller: _min,
+                  keyboardType: TextInputType.number,
+                  decoration: const InputDecoration(labelText: 'Minimum build', helperText: 'Below this: must update'),
+                ),
+              ],
+            ),
+            const SizedBox(height: kGapM),
+            TextField(
+              controller: _url,
+              keyboardType: TextInputType.url,
+              autocorrect: false,
+              decoration: const InputDecoration(labelText: 'Download link', helperText: 'https:// link to the Play Store page or the app file'),
+            ),
+            const SizedBox(height: kGapM),
+            TextField(
+              controller: _msg,
+              maxLines: 2,
+              maxLength: 300,
+              decoration: const InputDecoration(labelText: 'Message (optional)'),
+            ),
+            const SizedBox(height: kGapS),
+            FilledButton(onPressed: _busy ? null : _save, child: const Text('Save update notice')),
+          ],
+        ),
+      ),
+    );
+  }
 }

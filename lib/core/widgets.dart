@@ -243,7 +243,7 @@ class _NavButton extends StatelessWidget {
           onTap: onTap,
           child: ExcludeSemantics(
             child: Padding(
-              padding: const EdgeInsets.symmetric(vertical: kGapS, horizontal: 2),
+              padding: const EdgeInsets.symmetric(vertical: kGapS, horizontal: 8),
               child: Column(
                 mainAxisSize: MainAxisSize.min,
                 children: [
@@ -407,4 +407,49 @@ class OptionDropdown extends StatelessWidget {
     ],
     onChanged: (v) => onChanged(v ?? ''),
   );
+}
+
+/// A titled block of "label: value" lines (used for a person's details). Rows with an empty value are hidden;
+/// a block with no rows disappears.
+class DetailSection extends StatelessWidget {
+  const DetailSection({super.key, required this.title, required this.rows});
+  final String title;
+  final List<(String, String)> rows;
+
+  @override
+  Widget build(BuildContext context) {
+    final shown = [for (final r in rows) if (r.$2.trim().isNotEmpty) r];
+    if (shown.isEmpty) return const SizedBox.shrink();
+    final text = Theme.of(context).textTheme;
+    return Padding(
+      padding: const EdgeInsets.only(bottom: kGapM),
+      child: Container(
+        width: double.infinity,
+        padding: const EdgeInsets.all(kGapL),
+        decoration: BoxDecoration(
+          color: Theme.of(context).colorScheme.surfaceContainerLow,
+          borderRadius: BorderRadius.circular(16),
+          border: Border.all(color: Theme.of(context).dividerColor),
+        ),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Text(title, style: text.labelLarge?.copyWith(color: context.colors.brand)),
+            const SizedBox(height: kGapS),
+            for (final r in shown)
+              Padding(
+                padding: const EdgeInsets.symmetric(vertical: kGapXS),
+                child: Row(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    SizedBox(width: 128, child: Text(r.$1, style: text.bodyMedium?.copyWith(color: Theme.of(context).hintColor))),
+                    Expanded(child: SelectableText(r.$2, style: text.bodyLarge)),
+                  ],
+                ),
+              ),
+          ],
+        ),
+      ),
+    );
+  }
 }

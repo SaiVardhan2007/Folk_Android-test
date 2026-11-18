@@ -1,0 +1,97 @@
+import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
+import 'package:share_plus/share_plus.dart';
+
+import '../../core/layout.dart';
+import '../../core/theme.dart';
+import '../../core/widgets.dart';
+
+/// One public registration link: what it is, who it is assigned to, how many people used it, and Share / Copy.
+/// Admin passes [onEdit] and [onToggleOpen]; staff on Home see the same card without them.
+class LinkCard extends StatelessWidget {
+  const LinkCard({super.key, required this.link, this.onEdit, this.onToggleOpen});
+  final Map<String, dynamic> link;
+  final VoidCallback? onEdit;
+  final ValueChanged<bool>? onToggleOpen;
+
+  String get _title => '${link['title'] ?? ''}';
+  String get _url => '${link['url'] ?? ''}';
+  bool get _open => link['is_open'] == true;
+
+  Future<void> _share() => SharePlus.instance.share(ShareParams(text: '$_title\n$_url', subject: _title));
+
+  Future<void> _copy(BuildContext context) async {
+    await Clipboard.setData(ClipboardData(text: _url));
+    if (context.mounted) showMessage(context, 'Link copied');
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final text = Theme.of(context).textTheme;
+    final volunteer = link['type'] == 'Volunteer';
+    final assigned = '${link['assigned_name'] ?? ''}';
+    return Card(
+      child: Padding(
+        padding: const EdgeInsets.all(kGapM),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Row(
+              children: [
+                Expanded(child: Text(_title, style: text.titleSmall)),
+                if (onToggleOpen != null) Switch(value: _open, onChanged: onToggleOpen),
+                if (onToggleOpen == null && !_open) const Chip(label: Text('Closed'), visualDensity: VisualDensity.compact),
+              ],
+            ),
+            Wrap(
+              spacing: kGapS,
+              runSpacing: kGapXS,
+              children: [
+                Chip(
+                  avatar: Icon(volunteer ? Icons.volunteer_activism_outlined : Icons.how_to_reg_outlined, size: 18, color: context.colors.brand),
+                  label: Text(volunteer ? 'Volunteer' : 'Registration'),
+                  visualDensity: VisualDensity.compact,
+                ),
+                Chip(label: Text('${link['event_name'] ?? ''}'), visualDensity: VisualDensity.compact),
+                Chip(label: Text('${link['count'] ?? 0} registered'), visualDensity: VisualDensity.compact),
+              ],
+            ),
+            if (onEdit != null)
+              Padding(
+                padding: const EdgeInsets.only(top: kGapXS),
+                child: Text(assigned.isEmpty ? 'Not assigned to anyone' : 'Assigned to $assigned', style: text.bodyMedium),
+              ),
+            const SizedBox(height: kGapS),
+            SelectableText(_url, style: text.bodyMedium),
+            const SizedBox(height: kGapS),
+            Wrap(
+              spacing: kGapS,
+              runSpacing: kGapS,
+              children: [
+                FilledButton.icon(
+                  onPressed: _share,
+                  icon: const Icon(Icons.share_outlined),
+                  label: const Text('Share'),
+                  style: FilledButton.styleFrom(minimumSize: const Size(0, 48)),
+                ),
+                OutlinedButton.icon(
+                  onPressed: () => _copy(context),
+                  icon: const Icon(Icons.copy_outlined),
+                  label: const Text('Copy'),
+                  style: OutlinedButton.styleFrom(minimumSize: const Size(0, 48)),
+                ),
+                if (onEdit != null)
+                  OutlinedButton.icon(
+                    onPressed: onEdit,
+                    icon: const Icon(Icons.edit_outlined),
+                    label: const Text('Edit'),
+                    style: OutlinedButton.styleFrom(minimumSize: const Size(0, 48)),
+                  ),
+              ],
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+}

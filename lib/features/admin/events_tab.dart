@@ -6,6 +6,7 @@ import '../../core/theme.dart';
 import '../../core/widgets.dart';
 import '../auth/auth_controller.dart';
 import 'admin_repo.dart';
+import 'links_screen.dart';
 import 'registrations_screen.dart';
 
 class EventsTab extends ConsumerStatefulWidget {
@@ -90,6 +91,12 @@ class _EventsTabState extends ConsumerState<EventsTab> with AutomaticKeepAliveCl
       children: [
         FilledButton.icon(onPressed: _busy ? null : _add, icon: const Icon(Icons.add), label: const Text('Add event')),
         const SizedBox(height: 8),
+        OutlinedButton.icon(
+          onPressed: () => Navigator.of(context, rootNavigator: true).push(MaterialPageRoute<void>(builder: (_) => const LinksScreen())),
+          icon: const Icon(Icons.add_link),
+          label: const Text('Registration links'),
+        ),
+        const SizedBox(height: 8),
         Text('The "current" event is selected by default for everyone on Home, Attendance and Register.', style: text.bodyMedium),
         const SizedBox(height: 12),
         boot.when(
@@ -136,7 +143,7 @@ class _EventsTabState extends ConsumerState<EventsTab> with AutomaticKeepAliveCl
                                   style: FilledButton.styleFrom(minimumSize: const Size(0, 48)),
                                 ),
                               FilledButton.tonalIcon(
-                                onPressed: () => Navigator.of(context).push(
+                                onPressed: () => Navigator.of(context, rootNavigator: true).push(
                                   MaterialPageRoute<void>(
                                     builder: (_) => RegistrationsScreen(eventCode: e.code, eventName: e.name),
                                   ),

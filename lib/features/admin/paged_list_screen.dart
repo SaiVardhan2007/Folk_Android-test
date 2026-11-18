@@ -49,7 +49,7 @@ class _PagedListScreenState extends State<PagedListScreen> {
   final Map<String, String> _chosen = {};
   final List<Map<String, dynamic>> _rows = [];
   Map<String, dynamic> _first = const {};
-  int _page = 0;
+  int _page = 0, _generation = 0;
   bool _loading = false, _done = false, _exporting = false;
   String? _error;
 
@@ -78,19 +78,21 @@ class _PagedListScreenState extends State<PagedListScreen> {
   }
 
   Future<void> _fetch({bool reset = false}) async {
-    if (_loading || (_done && !reset)) return;
+    // A new search or filter (reset) always starts over; an answer to an older request is ignored when it arrives.
+    if (!reset && (_loading || _done)) return;
     if (reset) {
       _page = 0;
       _done = false;
       _rows.clear();
     }
+    final generation = reset ? ++_generation : _generation;
     setState(() {
       _loading = true;
       _error = null;
     });
     try {
       final r = await widget.load(_filters, _page);
-      if (!mounted) return;
+      if (!mounted || generation != _generation) return;
       final rows = ((r['rows'] as List?) ?? const []).map((e) => Map<String, dynamic>.from(e as Map)).toList();
       final size = (r['page_size'] as num?)?.toInt() ?? 50;
       setState(() {
@@ -100,11 +102,11 @@ class _PagedListScreenState extends State<PagedListScreen> {
         _done = rows.length < size;
       });
     } on ApiException catch (e) {
-      if (mounted) setState(() => _error = e.message);
+      if (mounted && generation == _generation) setState(() => _error = e.message);
     } catch (_) {
-      if (mounted) setState(() => _error = 'Could not load. Check your connection.');
+      if (mounted && generation == _generation) setState(() => _error = 'Could not load. Check your connection.');
     } finally {
-      if (mounted) setState(() => _loading = false);
+      if (mounted && generation == _generation) setState(() => _loading = false);
     }
   }
 

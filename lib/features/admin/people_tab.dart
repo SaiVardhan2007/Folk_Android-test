@@ -26,7 +26,7 @@ class _PeopleTabState extends ConsumerState<PeopleTab> with AutomaticKeepAliveCl
   Timer? _debounce;
   Map<String, String> _filters = {'sort': 'newest'};
   final List<Person> _items = [];
-  int _total = 0, _page = 0;
+  int _total = 0, _page = 0, _generation = 0;
   bool _loading = false, _done = false, _exporting = false;
   String? _error;
 
@@ -51,19 +51,21 @@ class _PeopleTabState extends ConsumerState<PeopleTab> with AutomaticKeepAliveCl
   }
 
   Future<void> _load({bool reset = false}) async {
-    if (_loading || (_done && !reset)) return;
+    // A new search or filter (reset) always starts over; an answer to an older request is ignored when it arrives.
+    if (!reset && (_loading || _done)) return;
     if (reset) {
       _page = 0;
       _done = false;
       _items.clear();
     }
+    final generation = reset ? ++_generation : _generation;
     setState(() {
       _loading = true;
       _error = null;
     });
     try {
       final r = await ref.read(adminRepoProvider).people(_filters, _page + 1);
-      if (!mounted) return;
+      if (!mounted || generation != _generation) return;
       setState(() {
         _page++;
         _items.addAll(r.people);
@@ -71,9 +73,9 @@ class _PeopleTabState extends ConsumerState<PeopleTab> with AutomaticKeepAliveCl
         _done = _items.length >= r.total || r.people.isEmpty;
       });
     } on ApiException catch (e) {
-      if (mounted) setState(() => _error = e.message);
+      if (mounted && generation == _generation) setState(() => _error = e.message);
     } finally {
-      if (mounted) setState(() => _loading = false);
+      if (mounted && generation == _generation) setState(() => _loading = false);
     }
   }
 
@@ -260,8 +262,8 @@ class _FilterSheetState extends State<_FilterSheet> {
             OptionDropdown(
               label: 'Registered event',
               value: f['event'] ?? '',
-              options: [for (final e in b?.events ?? <FolkEvent>[]) e.code],
-              labelOf: (c) => b!.events.firstWhere((e) => e.code == c).name,
+              options: [for (final e in b?.eventsAndLists ?? <FolkEvent>[]) e.code],
+              labelOf: (c) => b!.eventsAndLists.firstWhere((e) => e.code == c).name,
               onChanged: (v) => setState(() => f['event'] = v),
             ),
             OptionDropdown(
@@ -415,19 +417,58 @@ class _ManageSheetState extends ConsumerState<_ManageSheet> {
     final text = Theme.of(context).textTheme;
     return SheetBody(
       children: [
-        Text(p.name, style: text.titleLarge),
+        Row(
+          children: [
+            CircleAvatar(radius: 28, child: Text(p.name.isEmpty ? '?' : p.name[0].toUpperCase(), style: text.titleLarge)),
+            const SizedBox(width: kGapM),
+            Expanded(
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Text(p.name, style: text.titleLarge),
+                  const SizedBox(height: 2),
+                  Text(
+                    p.isPending ? '${p.tag}  •  Awaiting approval' : (p.isActive ? p.tag : '${p.tag}  •  Disabled'),
+                    style: text.bodyMedium?.copyWith(color: p.isPending ? context.colors.warning : (p.isActive ? null : context.colors.danger)),
+                  ),
+                ],
+              ),
+            ),
+          ],
+        ),
+        const SizedBox(height: kGapL),
+        DetailSection(title: 'Contact', rows: [
+          ('Mobile', p.mob),
+          ('Call number', p.callNo),
+          ('Venue', p.venue),
+          ('Map link', p.gmapLink),
+        ]),
+        DetailSection(title: 'About', rows: [
+          ('Gender', genderLabel(p.gender)),
+          ('Level', p.level),
+          ('Age', p.age > 0 ? '${p.age}' : ''),
+          ('Occupation', p.occupation),
+          ('Company / College', p.profession),
+          ('PG / Residence', p.pgName),
+          ('Staying', p.currentStay),
+          ('Chanting rounds', p.chantingRounds > 0 ? '${p.chantingRounds}' : ''),
+          ('Skills', p.skills),
+          ('Interests', p.interests),
+        ]),
+        DetailSection(title: 'FOLK Guide', rows: [
+          ('Folk Guide', p.folkGuide),
+          ('Guide name', p.fgName),
+          ('Guide mobile', p.fgMob),
+        ]),
+        DetailSection(title: 'Attendance', rows: [
+          ('Attended', '${p.attendanceCount} time${p.attendanceCount == 1 ? '' : 's'}'),
+          ('Last attended', p.lastAttendedOn),
+          ('Joined', p.joined),
+          ('Feedback', p.feedback),
+          ('Comments', p.comments),
+          ('Not interested', p.notInterested ? 'Yes (left out of call lists)' : ''),
+        ]),
         const SizedBox(height: 4),
-        Text(
-          '${p.mob}  •  ${p.level.isEmpty ? 'No level' : p.level}  •  ${genderLabel(p.gender).isEmpty ? 'Gender not set' : genderLabel(p.gender)}',
-          style: text.bodyMedium,
-        ),
-        if (p.profession.isNotEmpty || p.pgName.isNotEmpty)
-          Text([if (p.profession.isNotEmpty) p.profession, if (p.pgName.isNotEmpty) p.pgName].join('  •  '), style: text.bodyMedium),
-        Text(
-          'Attended ${p.attendanceCount}×  •  Registered by ${p.registeredBy.isEmpty ? '—' : p.registeredBy}  •  Joined ${p.joined}',
-          style: text.bodyMedium,
-        ),
-        const SizedBox(height: 16),
         if (isMe)
           Text('This is your own account: you can\'t change your role or password here.', style: text.bodyMedium)
         else ...[

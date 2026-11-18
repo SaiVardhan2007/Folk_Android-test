@@ -2,6 +2,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:go_router/go_router.dart';
 
+import 'core/app_update.dart';
 import 'core/config.dart';
 import 'core/theme.dart';
 import 'features/admin/admin_screen.dart';
@@ -20,9 +21,13 @@ class _AuthRefresh extends ChangeNotifier {
   }
 }
 
+/// Lets the update pop-up find the app's navigator from above the router.
+final rootNavigatorKey = GlobalKey<NavigatorState>();
+
 final routerProvider = Provider<GoRouter>((ref) {
   final refresh = _AuthRefresh(ref);
   return GoRouter(
+    navigatorKey: rootNavigatorKey,
     refreshListenable: refresh,
     redirect: (context, state) {
       final auth = ref.read(authProvider);
@@ -86,6 +91,7 @@ class FolkApp extends ConsumerWidget {
       darkTheme: buildTheme(Brightness.dark),
       themeMode: kThemeMode,
       routerConfig: ref.watch(routerProvider),
+      builder: (context, child) => UpdateGate(navigatorKey: rootNavigatorKey, child: child ?? const SizedBox.shrink()),
     );
   }
 }

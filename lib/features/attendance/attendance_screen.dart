@@ -184,7 +184,7 @@ class _AttendanceScreenState extends ConsumerState<AttendanceScreen> with Widget
             mob: mob,
             event: event,
             label: label,
-            edits: (isNew || _offlinePerson) ? null : f,
+            edits: null, // existing people are not edited at the attendance desk
             register: isNew ? f : null,
             allowQueue: ref.read(bootstrapProvider).value?.offlineEnabled ?? false,
           );
@@ -397,9 +397,14 @@ class _AttendanceScreenState extends ConsumerState<AttendanceScreen> with Widget
             ),
             if (!isNew && !_offlinePerson)
               Padding(
-                padding: const EdgeInsets.only(top: 4),
+                padding: const EdgeInsets.only(top: 6),
                 child: Text(
-                  'Attended ${p!.attendanceCount} time${p.attendanceCount == 1 ? '' : 's'}${p.lastAttendedOn.isEmpty ? '' : '  •  last on ${p.lastAttendedOn}'}',
+                  [
+                    if (p!.level.isNotEmpty) p.level,
+                    'Attended ${p.attendanceCount} time${p.attendanceCount == 1 ? '' : 's'}',
+                    if (p.lastAttendedOn.isNotEmpty) 'last on ${p.lastAttendedOn}',
+                    if (p.folkGuide.isNotEmpty) 'Guide: ${p.folkGuide}',
+                  ].join('  •  '),
                   style: text.bodyMedium,
                 ),
               ),
@@ -412,8 +417,6 @@ class _AttendanceScreenState extends ConsumerState<AttendanceScreen> with Widget
             if (_offlinePerson)
               Text('Offline: this check-in will be saved on your phone and sent automatically.', style: text.bodyMedium)
             else if (isNew)
-              PersonFields(form: _form, boot: boot)
-            else
               PersonFields(form: _form, boot: boot),
             const SizedBox(height: 12),
             FilledButton.icon(

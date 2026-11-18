@@ -23,6 +23,7 @@ class Person {
     this.callNo = '',
     this.fgName = '',
     this.fgMob = '',
+    this.folkGuide = '',
     this.age = 0,
     this.currentStay = '',
     this.skills = '',
@@ -34,7 +35,7 @@ class Person {
   });
 
   final String id, mob, name, gender, level, occupation, profession, pgName, eventCode, tag, lastAttendedOn, registeredBy, joined;
-  final String venue, gmapLink, callNo, fgName, fgMob;
+  final String venue, gmapLink, callNo, fgName, fgMob, folkGuide;
   final String currentStay, skills, interests, feedback, comments;
   final bool isActive, hasPassword, notInterested;
   final int attendanceCount, age, chantingRounds;
@@ -67,6 +68,7 @@ class Person {
     callNo: j['call_no'] as String? ?? '',
     fgName: j['fg_name'] as String? ?? '',
     fgMob: j['fg_mob'] as String? ?? '',
+    folkGuide: j['folk_guide'] as String? ?? '',
     age: (j['age'] as num?)?.toInt() ?? 0,
     currentStay: j['current_stay'] as String? ?? '',
     skills: j['skills'] as String? ?? '',
@@ -123,6 +125,7 @@ class Bootstrap {
   const Bootstrap({
     required this.user,
     required this.events,
+    this.lists = const [],
     required this.currentEvent,
     required this.tags,
     required this.levels,
@@ -135,6 +138,12 @@ class Bootstrap {
   });
   final Person user;
   final List<FolkEvent> events;
+
+  /// Always-open contact lists (Feedback, Contacts Register). Not events: never "current", no attendance days.
+  final List<FolkEvent> lists;
+
+  /// Events plus lists, for filters and call assignment where either can apply.
+  List<FolkEvent> get eventsAndLists => [...events, ...lists];
   final String currentEvent;
   final List<String> tags, levels, genders, occupations, stays, feedbacks;
 
@@ -149,6 +158,7 @@ class Bootstrap {
     return Bootstrap(
       user: Person.fromJson(Map<String, dynamic>.from(j['user'] as Map)),
       events: ((j['events'] as List?) ?? const []).map((e) => FolkEvent.fromJson(Map<String, dynamic>.from(e as Map))).toList(),
+      lists: ((j['lists'] as List?) ?? const []).map((e) => FolkEvent.fromJson(Map<String, dynamic>.from(e as Map))).toList(),
       currentEvent: j['current_event'] as String? ?? '',
       tags: list('tags'),
       levels: list('levels'),

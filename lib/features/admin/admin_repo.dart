@@ -49,7 +49,8 @@ class AdminRepo {
       ((await _api.get('/admin/templates'))['templates'] as List).map((e) => Map<String, dynamic>.from(e as Map)).toList();
   Future<void> saveTemplates(List<Map<String, dynamic>> t) => _api.put('/admin/templates', body: {'templates': t});
 
-  Future<void> addEvent(String code, String name) => _api.post('/admin/events', body: {'code': code, 'name': name});
+  Future<void> addEvent(String code, String name, {bool isList = false}) =>
+      _api.post('/admin/events', body: {'code': code, 'name': name, if (isList) 'is_list': true});
   Future<void> setCurrentEvent(String code) => _api.post('/admin/events/${Uri.encodeComponent(code)}/current');
 
   /// One page (50) of registrations for an event, with the totals shown at the top.
@@ -58,6 +59,16 @@ class AdminRepo {
 
   /// One page (50) of the activity log, newest first.
   Future<Map<String, dynamic>> logs(Map<String, String> filters, int page) => _api.get('/admin/logs', query: {...filters, 'page': page});
+
+  // ---- public registration links
+  Future<List<Map<String, dynamic>>> links() async => _linkList(await _api.get('/admin/links'));
+  Future<void> createLink(Map<String, dynamic> body) => _api.post('/admin/links', body: body);
+  Future<void> updateLink(String slug, Map<String, dynamic> patch) => _api.patch('/admin/links/$slug', body: patch);
+
+  /// Links assigned to the signed-in person.
+  Future<List<Map<String, dynamic>>> myLinks() async => _linkList(await _api.get('/my/links'));
+  List<Map<String, dynamic>> _linkList(Map<String, dynamic> r) =>
+      ((r['links'] as List?) ?? const []).map((e) => Map<String, dynamic>.from(e as Map)).toList();
 
   Future<Map<String, dynamic>> analytics(Map<String, String> filters) => _api.get('/admin/analytics', query: filters);
 

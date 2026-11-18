@@ -20,6 +20,9 @@ class RegistrationsScreen extends ConsumerWidget {
       searchLabel: 'Search name or mobile',
       emptyText: 'No registrations for this event.',
       fixedFilters: {'event': eventCode},
+      chips: const {
+        'kind': ['Volunteers', 'Dinner', 'Donors', 'Transport'],
+      },
       load: repo.registrations,
       export: (f) => repo.shareCsv('/admin/export/registrations', 'folk-registrations-$eventCode.csv', query: f),
       header: (context, r) {
