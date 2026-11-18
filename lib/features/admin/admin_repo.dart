@@ -57,6 +57,9 @@ class AdminRepo {
   Future<Map<String, dynamic>> registrations(Map<String, String> filters, int page) =>
       _api.get('/admin/registrations', query: {...filters, 'page': page});
 
+  /// One page (50) of feedback answers for an event, with the total and the average rating.
+  Future<Map<String, dynamic>> feedback(Map<String, String> filters, int page) => _api.get('/admin/feedback', query: {...filters, 'page': page});
+
   /// One page (50) of the activity log, newest first.
   Future<Map<String, dynamic>> logs(Map<String, String> filters, int page) => _api.get('/admin/logs', query: {...filters, 'page': page});
 

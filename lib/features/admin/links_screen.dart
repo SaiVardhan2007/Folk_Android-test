@@ -9,46 +9,54 @@ import '../auth/auth_controller.dart';
 import 'admin_repo.dart';
 import 'link_card.dart';
 
-final _linksProvider = FutureProvider.autoDispose<List<Map<String, dynamic>>>((ref) => ref.read(adminRepoProvider).links());
+/// All public form links (admin). Invalidate after any change.
+final linksProvider = FutureProvider.autoDispose<List<Map<String, dynamic>>>((ref) => ref.read(adminRepoProvider).links());
 
-/// Admin → Events → Registration links: public pages anyone can open from a WhatsApp message (no app, no sign-in).
+/// Opens the create/edit sheet. [eventCode] pre-selects the event for a new link.
+Future<void> showLinkSheet(BuildContext context, WidgetRef ref, {Map<String, dynamic>? link, String eventCode = ''}) async {
+  final saved = await showModalBottomSheet<bool>(
+    context: context,
+    isScrollControlled: true,
+    useRootNavigator: true,
+    showDragHandle: true,
+    builder: (_) => _LinkSheet(link: link, eventCode: eventCode),
+  );
+  if (saved == true) ref.invalidate(linksProvider);
+}
+
+/// Opens or closes a link for new responses.
+Future<void> setLinkOpen(BuildContext context, WidgetRef ref, Map<String, dynamic> l, bool open) async {
+  try {
+    await ref.read(adminRepoProvider).updateLink('${l['slug']}', {'is_open': open});
+    ref.invalidate(linksProvider);
+  } on ApiException catch (e) {
+    if (context.mounted) showMessage(context, e.message, error: true);
+  }
+}
+
+/// Admin → Events → More links: every public form of one event (extra volunteer links, links assigned to a person, and the two standard forms).
 class LinksScreen extends ConsumerWidget {
-  const LinksScreen({super.key});
-
-  Future<void> _edit(BuildContext context, WidgetRef ref, [Map<String, dynamic>? link]) async {
-    final saved = await showModalBottomSheet<bool>(
-      context: context,
-      isScrollControlled: true,
-      useRootNavigator: true,
-      showDragHandle: true,
-      builder: (_) => _LinkSheet(link: link),
-    );
-    if (saved == true) ref.invalidate(_linksProvider);
-  }
-
-  Future<void> _toggle(BuildContext context, WidgetRef ref, Map<String, dynamic> l, bool open) async {
-    try {
-      await ref.read(adminRepoProvider).updateLink('${l['slug']}', {'is_open': open});
-      ref.invalidate(_linksProvider);
-    } on ApiException catch (e) {
-      if (context.mounted) showMessage(context, e.message, error: true);
-    }
-  }
+  const LinksScreen({super.key, this.eventCode = '', this.eventName = ''});
+  final String eventCode, eventName;
 
   @override
   Widget build(BuildContext context, WidgetRef ref) {
-    final links = ref.watch(_linksProvider);
+    final links = ref.watch(linksProvider);
     final text = Theme.of(context).textTheme;
     return Scaffold(
-      appBar: AppBar(title: const Text('Registration links')),
+      appBar: AppBar(title: Text(eventName.isEmpty ? 'Public forms' : '$eventName forms')),
       body: PageBody(
-        onRefresh: () async => ref.invalidate(_linksProvider),
+        onRefresh: () async => ref.invalidate(linksProvider),
         children: [
-          FilledButton.icon(onPressed: () => _edit(context, ref), icon: const Icon(Icons.add_link), label: const Text('New link')),
+          FilledButton.icon(
+            onPressed: () => showLinkSheet(context, ref, eventCode: eventCode),
+            icon: const Icon(Icons.add_link),
+            label: const Text('New link'),
+          ),
           const SizedBox(height: kGapS),
           Text(
-            'Share a link on WhatsApp. People enter their mobile number; if they are already in FOLK their details appear (they cannot be changed there), '
-            'and they register for the event or as a volunteer. Assign a link to someone to see who brings in registrations.',
+            'Every event already has a Register link and a Feedback link. Add more here, for example a volunteer link, or a link assigned to a person '
+            'so you can see who brings in registrations.',
             style: text.bodyMedium,
           ),
           const SizedBox(height: kGapM),
@@ -58,21 +66,31 @@ class LinksScreen extends ConsumerWidget {
               child: Center(child: CircularProgressIndicator()),
             ),
             error: (e, _) =>
-                ErrorView(message: e is ApiException ? e.message : 'Could not load links.', onRetry: () => ref.invalidate(_linksProvider)),
-            data: (list) => list.isEmpty
-                ? Padding(
-                    padding: const EdgeInsets.all(24),
-                    child: Center(child: Text('No links yet. Tap New link.', style: text.bodyMedium)),
-                  )
-                : Column(
-                    children: [
-                      for (final l in list)
-                        Padding(
-                          padding: const EdgeInsets.only(bottom: kGapS),
-                          child: LinkCard(link: l, onEdit: () => _edit(context, ref, l), onToggleOpen: (v) => _toggle(context, ref, l, v)),
-                        ),
-                    ],
-                  ),
+                ErrorView(message: e is ApiException ? e.message : 'Could not load links.', onRetry: () => ref.invalidate(linksProvider)),
+            data: (all) {
+              final list = [
+                for (final l in all)
+                  if (eventCode.isEmpty || l['event_code'] == eventCode) l,
+              ];
+              return list.isEmpty
+                  ? Padding(
+                      padding: const EdgeInsets.all(24),
+                      child: Center(child: Text('No links yet. Tap New link.', style: text.bodyMedium)),
+                    )
+                  : Column(
+                      children: [
+                        for (final l in list)
+                          Padding(
+                            padding: const EdgeInsets.only(bottom: kGapS),
+                            child: LinkCard(
+                              link: l,
+                              onEdit: () => showLinkSheet(context, ref, link: l),
+                              onToggleOpen: (v) => setLinkOpen(context, ref, l, v),
+                            ),
+                          ),
+                      ],
+                    );
+            },
           ),
         ],
       ),
@@ -82,8 +100,9 @@ class LinksScreen extends ConsumerWidget {
 
 /// Create (no [link]) or edit a link. Type and event are fixed once created, because registrations belong to them.
 class _LinkSheet extends ConsumerStatefulWidget {
-  const _LinkSheet({this.link});
+  const _LinkSheet({this.link, this.eventCode = ''});
   final Map<String, dynamic>? link;
+  final String eventCode;
   @override
   ConsumerState<_LinkSheet> createState() => _LinkSheetState();
 }
@@ -96,7 +115,7 @@ class _LinkSheetState extends ConsumerState<_LinkSheet> {
   late final _slots = TextEditingController(text: ((widget.link?['slots'] as List?) ?? const []).join('\n'));
   late final _services = TextEditingController(text: ((widget.link?['services'] as List?) ?? const []).join('\n'));
   late String _type = '${widget.link?['type'] ?? 'Registration'}';
-  late String _event = '${widget.link?['event_code'] ?? ''}';
+  late String _event = '${widget.link?['event_code'] ?? widget.eventCode}';
   late bool _dinner = widget.link?['ask_dinner'] == true,
       _transport = widget.link?['ask_transport'] == true,
       _donation = widget.link?['ask_donation'] == true;
@@ -235,7 +254,7 @@ class _LinkSheetState extends ConsumerState<_LinkSheet> {
                   onChanged: (v) => setState(() => _donation = v),
                   title: const Text('Ask about donation'),
                 ),
-              ] else ...[
+              ] else if (_type == 'Volunteer') ...[
                 const SizedBox(height: kGapM),
                 TextFormField(
                   controller: _slots,

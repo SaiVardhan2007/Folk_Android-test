@@ -21,6 +21,7 @@ const LOG = "FOLK Call Log";
 const REG = "FOLK Registration";
 const ACT = "FOLK Activity Log";
 const LINK = "FOLK Form Link";
+const FB = "FOLK Feedback";
 const PAGE_SIZE = 25;
 
 // ---------- small helpers
@@ -113,7 +114,7 @@ const ACTIVITY: [string, RegExp, string, ((b: Body, path: string) => string)?][]
   ["DELETE", /^\/attendance\//, "Removed an attendance record"],
   ["POST", /^\/registrations$/, "Registered a person for an event", (b) => `event ${str(b.event)}`],
   ["POST", /^\/my\/calls\/[^/]+\/submit$/, "Logged a call", (b) => str(b.status)],
-  ["POST", /^\/pub\/[^/]+\/submit$/, "Registered through a public link"],
+  ["POST", /^\/pub\/[^/]+\/submit$/, "Submitted a public form"],
   ["POST", /^\/admin\/links$/, "Created a registration link", (b) => str(b.title)],
   ["PATCH", /^\/admin\/links\/[^/]+$/, "Changed a registration link", (b) => str(b.title)],
   ["PATCH", /^\/admin\/people\/\d+\/role$/, "Changed a role", (b) => str(b.tag)],
@@ -649,6 +650,8 @@ app.post("/admin/events", async (c) => {
     throw e;
   }
   memo.delete("events");
+  // Every real event gets its Registration and Feedback forms straight away (dynamic: nothing to set up by hand).
+  if (b.is_list !== true) await ensureEventLinks(erpOf(c), code, name);
   return c.json({ ok: true }, 201);
 });
 
@@ -1123,7 +1126,7 @@ app.get("/admin/export/registrations", async (c) => {
 
 // ---------- public registration links (no sign-in): the page, the number lookup and the submit
 type LinkRow = {
-  name: string; title: string; link_type: "Registration" | "Volunteer"; event_code: string; assigned_to?: string; assigned_name?: string; is_open?: number; intro?: string;
+  name: string; title: string; link_type: "Registration" | "Volunteer" | "Feedback"; event_code: string; assigned_to?: string; assigned_name?: string; is_open?: number; intro?: string;
   ask_dinner?: number; ask_transport?: number; ask_donation?: number; slot_options?: string; service_options?: string;
 };
 const LINK_FIELDS = ["name", "title", "link_type", "event_code", "assigned_to", "assigned_name", "is_open", "intro", "ask_dinner", "ask_transport", "ask_donation", "slot_options", "service_options"];
@@ -1135,6 +1138,19 @@ async function publicLimit(c: Ctx) {
   const ip = c.req.header("CF-Connecting-IP") ?? "unknown";
   const r = await c.env.PUBLIC_LIMITER?.limit({ key: `pub:${ip}` });
   if (r && !r.success) throw new HttpError(429, "Too many attempts. Please wait a minute and try again.");
+}
+
+/** Readable, stable link code for an event's own form, e.g. rathayatra-2026-feedback. Same rule as scripts/phase14_event_forms.py. */
+const eventSlug = (code: string, kind: "register" | "feedback") => `${code.toLowerCase().replace(/[^a-z0-9]+/g, "-").slice(0, 24).replace(/^-+|-+$/g, "") || "event"}-${kind}`;
+
+/** Creates the event's Registration and Feedback links if it has none. Safe to repeat. */
+async function ensureEventLinks(erp: Erp, code: string, name: string) {
+  const have = await erp.list<{ link_type: string }>(LINK, ["link_type"], [["event_code", "=", code]]);
+  for (const [kind, type, label] of [["register", "Registration", "Registration"], ["feedback", "Feedback", "Feedback"]] as const) {
+    if (have.some((h) => h.link_type === type)) continue;
+    try { await erp.insert(LINK, { slug: eventSlug(code, kind), title: `${name} - ${label}`, link_type: type, event_code: code, is_open: 1 }); }
+    catch (e) { if (!isDuplicate(e)) throw e; }
+  }
 }
 
 app.get("/f/:slug", async (c) => {
@@ -1162,7 +1178,7 @@ app.post("/pub/:slug/lookup", async (c) => {
   const [p] = await erp.list<{ name: string; full_name: string; gender?: string; occupation?: string; profession?: string; venue?: string }>(
     PERSON, ["name", "full_name", "gender", "occupation", "profession", "venue"], [["mob_no", "=", mob]], { limit_page_length: 1 });
   if (!p) return c.json({ found: false });
-  const reg = await erp.get(REG, `${link.event_code}-${p.name}`);
+  const reg = await erp.get(link.link_type === "Feedback" ? FB : REG, `${link.event_code}-${p.name}`);
   return c.json({ found: true, registered: !!reg, person: { name: p.full_name, gender: p.gender ?? "", occupation: p.occupation ?? "", profession: p.profession ?? "", venue: p.venue ?? "" } });
 });
 
@@ -1178,6 +1194,8 @@ app.post("/pub/:slug/submit", async (c) => {
   const mob = normalizeMobile(b.mob);
   if (!mob) throw bad("Please enter a valid 10-digit mobile number.");
   const erp = erpOf(c);
+
+  if (link.link_type === "Feedback") return submitFeedback(c, erp, link, mob, b);
 
   // Questions for this link
   const reg: Record<string, unknown> = {};
@@ -1233,15 +1251,73 @@ app.post("/pub/:slug/submit", async (c) => {
   return c.json({ ok: true, name: person.full_name, created, already });
 });
 
+/** A feedback form answer: one per person per event (sending again replaces the earlier answer). */
+async function submitFeedback(c: Ctx, erp: Erp, link: LinkRow, mob: string, b: Body) {
+  const rating = intIn(b.rating, 1, 5);
+  if (!rating) throw bad("Please choose a rating from 1 to 5.");
+  let [person] = await erp.list<Row>(PERSON, AUTH_FIELDS, [["mob_no", "=", mob]], { limit_page_length: 1 });
+  let created = false;
+  if (!person) {
+    const name = clean(b.name, 100);
+    if (!name) throw bad("Please enter your name.");
+    const doc = { mob_no: mob, full_name: name, gender: pick(b.gender, GENDERS), event_code: link.event_code, user_tag: "Public", is_active: 1, registered_on: istToday(), registered_by: `Link: ${link.title}`.slice(0, 140) };
+    try { person = (await erp.insert<Row>(PERSON, nonEmpty(doc))).data; created = true; }
+    catch (e) { if (!isDuplicate(e)) throw e; [person] = await erp.list<Row>(PERSON, AUTH_FIELDS, [["mob_no", "=", mob]], { limit_page_length: 1 }); }
+  }
+  if (!person) throw new HttpError(500, "Could not save. Please try again.");
+  const key = `${link.event_code}-${person.name}`;
+  const answer = { rating, liked: clean(b.liked, 500), improve: clean(b.improve, 500), comments: clean(b.comments, 500) };
+  let already = false;
+  try { await erp.insert(FB, { fb_key: key, event_code: link.event_code, person: person.name, via_link: link.name, submitted_at: istNow(), ...answer }); }
+  catch (e) { if (!isDuplicate(e)) throw e; already = true; await erp.update(FB, key, { ...answer, via_link: link.name, submitted_at: istNow() }); }
+  c.set("actor", { id: person.name, mob, name: person.full_name, tag: "Public link" });
+  c.set("log", { target: `${person.full_name} (${mob})`, details: `${link.title} · ${rating}/5${created ? " · new contact" : ""}${already ? " · updated" : ""}` });
+  return c.json({ ok: true, name: person.full_name, created, already });
+}
+
+/** Feedback answers for an event (admin). */
+const FB_COLS = ["name", "event_code", "person_name", "person_mob", "rating", "liked", "improve", "comments", "submitted_at"];
+const fbQuery = (q: Record<string, string>) => {
+  const f: Filters = [];
+  const event = clean(q.event, 60);
+  if (event) f.push(["event_code", "=", event]);
+  const text = clean(q.q, 60).replace(/[%_]/g, "");
+  return { f, or: text ? { or_filters: [["person_name", "like", `%${text}%`], ["person_mob", "like", `%${text.replace(/\D/g, "") || text}%`]] } : {} };
+};
+app.get("/admin/feedback", async (c) => {
+  needAdmin(c);
+  const q = c.req.query();
+  const { f, or } = fbQuery(q);
+  const page = Math.max(0, parseInt(q.page ?? "0", 10) || 0);
+  const erp = erpOf(c);
+  const [rows, total, stars] = await Promise.all([
+    erp.list<Record<string, unknown>>(FB, FB_COLS, f, { ...or, order_by: "submitted_at desc", limit_page_length: 50, limit_start: page * 50 }),
+    erp.count(FB, f, or),
+    erp.list<{ rating: number; n: number }>(FB, aggregate("rating", { COUNT: "*", as: "n" }), f, { ...or, group_by: "rating", limit_page_length: 10 }),
+  ]);
+  const answered = stars.reduce((a, x) => a + x.n, 0);
+  const average = answered ? Math.round((stars.reduce((a, x) => a + x.rating * x.n, 0) / answered) * 10) / 10 : 0;
+  return c.json({ rows, page, page_size: 50, summary: { total, average } });
+});
+app.get("/admin/export/feedback", async (c) => {
+  needAdmin(c);
+  const { f, or } = fbQuery(c.req.query());
+  const cols = FB_COLS.filter((x) => x !== "name");
+  const rows = await erpOf(c).list<Record<string, unknown>>(FB, cols, f, { ...or, order_by: "submitted_at desc", limit_page_length: 0 });
+  return csvResponse(c, "folk-feedback.csv", csv(cols, rows));
+});
+
 // ---------- registration links: admin manages them, staff see the ones assigned to them
 const SLUG_CHARS = "abcdefghjkmnpqrstuvwxyz23456789";
 const newSlug = () => Array.from(crypto.getRandomValues(new Uint8Array(8)), (n) => SLUG_CHARS[n % SLUG_CHARS.length]).join("");
 
 async function linksOut(c: Ctx, rows: LinkRow[]) {
-  const [events, counts] = await Promise.all([
+  const [events, regCounts, fbCounts] = await Promise.all([
     loadEvents(c),
     erpOf(c).list<{ via_link: string; n: number }>(REG, aggregate({ COUNT: "*", as: "n" }, "via_link"), [["via_link", "!=", ""]], { group_by: "via_link", limit_page_length: 0 }),
+    erpOf(c).list<{ via_link: string; n: number }>(FB, aggregate({ COUNT: "*", as: "n" }, "via_link"), [["via_link", "!=", ""]], { group_by: "via_link", limit_page_length: 0 }),
   ]);
+  const counts = [...regCounts, ...fbCounts];
   const origin = new URL(c.req.url).origin;
   const n = new Map(counts.map((x) => [x.via_link, x.n]));
   return rows.map((l) => ({

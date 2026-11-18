@@ -1,10 +1,10 @@
-// The public registration / volunteer page. One self-contained HTML document (no external fonts, scripts or images),
+// The public registration / volunteer / feedback page. One self-contained HTML document (no external fonts, scripts or images),
 // served by the Worker at /f/:slug and opened from a WhatsApp link. All user text is inserted with textContent, never innerHTML.
 
 export type PageConfig = {
   slug: string;
   title: string;
-  type: "Registration" | "Volunteer";
+  type: "Registration" | "Volunteer" | "Feedback";
   eventName: string;
   open: boolean;
   intro: string;
@@ -38,8 +38,12 @@ header p{margin:0;font-size:var(--text-small);opacity:.92}
 main{width:100%;max-width:640px;margin:0 auto;padding:var(--gap)}
 .card{background:var(--card);border:1px solid var(--line);border-radius:var(--radius);padding:var(--gap);margin-bottom:var(--gap)}
 label{display:block;font-weight:600;margin:14px 0 6px}
-input,select{width:100%;height:var(--field-height);padding:0 14px;font:inherit;color:var(--ink);background:#fff;border:1.5px solid var(--line);border-radius:12px}
-input:focus,select:focus{outline:3px solid #FFE2C8;border-color:var(--brand)}
+input,select,textarea{width:100%;height:var(--field-height);padding:0 14px;font:inherit;color:var(--ink);background:#fff;border:1.5px solid var(--line);border-radius:12px}
+input:focus,select:focus,textarea:focus{outline:3px solid #FFE2C8;border-color:var(--brand)}
+.stars{display:flex;gap:8px;margin:6px 0}
+.stars button{flex:1;margin:0;height:var(--field-height);background:#fff;color:var(--muted);border:1.5px solid var(--line);font-size:26px;font-weight:700}
+.stars button.on{background:var(--brand);color:var(--on-brand);border-color:var(--brand)}
+textarea{height:auto;min-height:96px;padding:12px 14px;resize:vertical}
 .check{display:flex;align-items:center;gap:12px;margin:14px 0;font-weight:500}
 .check input{width:26px;height:26px;flex:none;accent-color:var(--brand)}
 button{width:100%;height:var(--field-height);margin-top:18px;border:0;border-radius:14px;background:var(--brand);color:var(--on-brand);font:inherit;font-weight:700;cursor:pointer}
@@ -64,7 +68,7 @@ const SCRIPT = `
 (function(){
   var C = JSON.parse(document.getElementById('cfg').textContent);
   var app = document.getElementById('app');
-  var state = { mob: '', found: false, person: null, registered: false, started: Date.now() };
+  var state = { mob: '', found: false, person: null, registered: false, rating: 0, started: Date.now() };
 
   function el(tag, props, kids){
     var n = document.createElement(tag);
@@ -100,6 +104,7 @@ const SCRIPT = `
     options.forEach(function(o){ var v = typeof o === 'string' ? o : o.value, t = typeof o === 'string' ? o : o.label; s.appendChild(el('option', {value: v, text: t})); });
     return s;
   }
+  function area(id, max){ return el('textarea', {id: id, maxlength: String(max || 500), rows: '3'}); }
   function val(id){ var x = document.getElementById(id); return x ? x.value.trim() : ''; }
   function chk(id){ var x = document.getElementById(id); return !!(x && x.checked); }
   function check(id, text){ return el('label', {class:'check'}, [el('input', {type:'checkbox', id:id}), el('span', {text:text})]); }
@@ -145,20 +150,32 @@ const SCRIPT = `
         row('Name', p.name), row('Mobile', state.mob), row('Gender', genderLabel(p.gender)), row('Occupation', p.occupation),
         row('College / Company', p.profession), row('Area', p.venue)
       ]));
-      if (state.registered) kids.push(el('div', {class:'note', text: C.type === 'Volunteer' ? 'You are already registered for this event. Submit again to update your volunteer choices.' : 'You are already registered for this event. Submit again to update your answers.'}));
+      if (state.registered && C.type === 'Feedback') kids.push(el('div', {class:'note', text:'You have already sent feedback for this event. Submit again to replace it.'}));
+      else if (state.registered) kids.push(el('div', {class:'note', text: C.type === 'Volunteer' ? 'You are already registered for this event. Submit again to update your volunteer choices.' : 'You are already registered for this event. Submit again to update your answers.'}));
     } else {
       kids.push(el('div', {class:'card'}, [
         el('h2', {text:'Welcome! Tell us about you'}),
         el('p', {class:'sub', text:'Mobile: ' + state.mob}),
         field('Full name *', el('input', {id:'name', type:'text', autocomplete:'name', maxlength:'100'})),
-        field('Gender *', select('gender', C.genders)),
-        field('Occupation', select('occupation', C.occupations)),
-        field('College / Company', el('input', {id:'profession', type:'text', maxlength:'120'})),
-        field('Area you stay in', el('input', {id:'venue', type:'text', maxlength:'120'}))
+        C.type === 'Feedback' ? null : field('Gender *', select('gender', C.genders)),
+        C.type === 'Feedback' ? null : field('Occupation', select('occupation', C.occupations)),
+        C.type === 'Feedback' ? null : field('College / Company', el('input', {id:'profession', type:'text', maxlength:'120'})),
+        C.type === 'Feedback' ? null : field('Area you stay in', el('input', {id:'venue', type:'text', maxlength:'120'}))
       ]));
     }
     var q = [];
-    if (C.type === 'Volunteer') {
+    if (C.type === 'Feedback') {
+      var stars = el('div', {class:'stars', id:'stars', role:'radiogroup', 'aria-label':'Rating'});
+      for (var i = 1; i <= 5; i++) (function(n){
+        var b = el('button', {type:'button', text: String(n), 'aria-label': n + ' out of 5'});
+        b.addEventListener('click', function(){ state.rating = n; Array.prototype.forEach.call(stars.children, function(x, k){ x.className = k < n ? 'on' : ''; }); });
+        stars.appendChild(b);
+      })(i);
+      q.push(el('div', {}, [el('label', {text:'How was it? (1 = poor, 5 = excellent) *'}), stars]));
+      q.push(field('What did you like the most?', area('liked')));
+      q.push(field('What can we do better?', area('improve')));
+      q.push(field('Anything else you would like to tell us?', area('comments')));
+    } else if (C.type === 'Volunteer') {
       if (C.slots.length) q.push(field('Which time can you serve? *', select('slot', C.slots)));
       if (C.services.length) q.push(field('Which service would you like to do?', select('service', C.services, 'Any / not sure')));
     } else {
@@ -168,7 +185,8 @@ const SCRIPT = `
     }
     if (q.length) kids.push(el('div', {class:'card'}, q));
     var err = el('div', {class:'error', role:'alert'});
-    var btn = el('button', {type:'submit', text: C.type === 'Volunteer' ? 'Register as volunteer' : 'Register'});
+    var btnText = C.type === 'Feedback' ? 'Send feedback' : (C.type === 'Volunteer' ? 'Register as volunteer' : 'Register');
+    var btn = el('button', {type:'submit', text: btnText});
     var back = el('button', {type:'button', class:'link', text:'Use a different number'});
     back.addEventListener('click', stepPhone);
     var hp = el('div', {class:'hp', 'aria-hidden':'true'}, [el('input', {id:'website', type:'text', tabindex:'-1', autocomplete:'off'})]);
@@ -179,15 +197,18 @@ const SCRIPT = `
       if (!state.found) {
         body.name = val('name'); body.gender = val('gender'); body.occupation = val('occupation'); body.profession = val('profession'); body.venue = val('venue');
         if (!body.name) { err.textContent = 'Please enter your name.'; return; }
-        if (!body.gender) { err.textContent = 'Please choose your gender.'; return; }
+        if (C.type !== 'Feedback' && !body.gender) { err.textContent = 'Please choose your gender.'; return; }
       }
-      if (C.type === 'Volunteer') {
+      if (C.type === 'Feedback') {
+        if (!state.rating) { err.textContent = 'Please choose a rating from 1 to 5.'; return; }
+        body.rating = state.rating; body.liked = val('liked'); body.improve = val('improve'); body.comments = val('comments');
+      } else if (C.type === 'Volunteer') {
         body.slot = val('slot'); body.service = val('service');
         if (C.slots.length && !body.slot) { err.textContent = 'Please choose a time slot.'; return; }
       } else { body.dinner = chk('dinner'); body.transport = chk('transport'); body.donation = chk('donation'); }
       btn.disabled = true; btn.textContent = 'Saving...';
       post('submit', body).then(function(r){ stepDone(r.name); })
-        .catch(function(e2){ err.textContent = e2.message; btn.disabled = false; btn.textContent = C.type === 'Volunteer' ? 'Register as volunteer' : 'Register'; });
+        .catch(function(e2){ err.textContent = e2.message; btn.disabled = false; btn.textContent = btnText; });
     });
     app.appendChild(form);
     window.scrollTo(0, 0);
@@ -199,13 +220,13 @@ const SCRIPT = `
     app.appendChild(el('div', {class:'card done'}, [
       el('div', {class:'tick', text:'\\u2713'}),
       el('h2', {text:'Hare Krishna' + (first ? ', ' + first : '') + '!'}),
-      el('p', {text: C.type === 'Volunteer' ? 'Thank you for offering to serve at ' + C.eventName + '. We will contact you soon.' : 'You are registered for ' + C.eventName + '. We look forward to seeing you.'})
+      el('p', {text: C.type === 'Feedback' ? 'Thank you for your feedback on ' + C.eventName + '. It helps us serve better.' : C.type === 'Volunteer' ? 'Thank you for offering to serve at ' + C.eventName + '. We will contact you soon.' : 'You are registered for ' + C.eventName + '. We look forward to seeing you.'})
     ]));
     window.scrollTo(0, 0);
   }
 
   if (!C.open) {
-    app.appendChild(el('div', {class:'card done'}, [el('h2', {text:'Registration is closed'}), el('p', {text:'This form is not taking responses right now. Please contact the FOLK team.'})]));
+    app.appendChild(el('div', {class:'card done'}, [el('h2', {text: C.type === 'Feedback' ? 'Feedback is closed' : 'Registration is closed'}), el('p', {text:'This form is not taking responses right now. Please contact the FOLK team.'})]));
   } else { stepPhone(); }
 })();
 `;

@@ -6,6 +6,8 @@ import '../../core/theme.dart';
 import '../../core/widgets.dart';
 import '../auth/auth_controller.dart';
 import 'admin_repo.dart';
+import 'feedback_screen.dart';
+import 'link_card.dart';
 import 'links_screen.dart';
 import 'registrations_screen.dart';
 
@@ -86,18 +88,31 @@ class _EventsTabState extends ConsumerState<EventsTab> with AutomaticKeepAliveCl
     final boot = ref.watch(bootstrapProvider);
     final text = Theme.of(context).textTheme;
     final repo = ref.read(adminRepoProvider);
+    final links = ref.watch(linksProvider).value ?? const <Map<String, dynamic>>[];
+    // An event's own forms: the oldest unassigned link of each type (the list is newest first).
+    Map<String, dynamic>? formOf(String code, String type) {
+      final mine = [
+        for (final l in links)
+          if (l['event_code'] == code && l['type'] == type) l,
+      ];
+      return mine.where((l) => '${l['assigned_to'] ?? ''}'.isEmpty).lastOrNull ?? mine.lastOrNull;
+    }
+
     return PageBody(
-      onRefresh: () async => ref.refresh(bootstrapProvider.future),
+      onRefresh: () async {
+        ref.invalidate(linksProvider);
+        ref.invalidate(bootstrapProvider);
+        await ref.read(bootstrapProvider.future);
+      },
       children: [
         FilledButton.icon(onPressed: _busy ? null : _add, icon: const Icon(Icons.add), label: const Text('Add event')),
         const SizedBox(height: 8),
-        OutlinedButton.icon(
-          onPressed: () => Navigator.of(context, rootNavigator: true).push(MaterialPageRoute<void>(builder: (_) => const LinksScreen())),
-          icon: const Icon(Icons.add_link),
-          label: const Text('Registration links'),
-        ),
         const SizedBox(height: 8),
-        Text('The "current" event is selected by default for everyone on Home, Attendance and Register.', style: text.bodyMedium),
+        Text(
+          'The "current" event is selected by default for everyone on Home, Attendance and Register. '
+          'Every event has its own Register form and Feedback form: share the links from the event.',
+          style: text.bodyMedium,
+        ),
         const SizedBox(height: 12),
         boot.when(
           loading: () => const Padding(
@@ -131,6 +146,16 @@ class _EventsTabState extends ConsumerState<EventsTab> with AutomaticKeepAliveCl
                           ),
                           Text('Code: ${e.code}', style: text.bodyMedium),
                           const SizedBox(height: 12),
+                          for (final type in const ['Registration', 'Feedback'])
+                            if (formOf(e.code, type) case final l?)
+                              Padding(
+                                padding: const EdgeInsets.only(bottom: 10),
+                                child: EventLinkTile(
+                                  link: l,
+                                  onToggleOpen: (v) => setLinkOpen(context, ref, l, v),
+                                  onEdit: () => showLinkSheet(context, ref, link: l),
+                                ),
+                              ),
                           Wrap(
                             spacing: 10,
                             runSpacing: 10,
@@ -151,6 +176,26 @@ class _EventsTabState extends ConsumerState<EventsTab> with AutomaticKeepAliveCl
                                 icon: const Icon(Icons.how_to_reg_outlined),
                                 label: const Text('Registrations'),
                                 style: FilledButton.styleFrom(minimumSize: const Size(0, 48)),
+                              ),
+                              FilledButton.tonalIcon(
+                                onPressed: () => Navigator.of(context, rootNavigator: true).push(
+                                  MaterialPageRoute<void>(
+                                    builder: (_) => FeedbackScreen(eventCode: e.code, eventName: e.name),
+                                  ),
+                                ),
+                                icon: const Icon(Icons.rate_review_outlined),
+                                label: const Text('Feedback'),
+                                style: FilledButton.styleFrom(minimumSize: const Size(0, 48)),
+                              ),
+                              OutlinedButton.icon(
+                                onPressed: () => Navigator.of(context, rootNavigator: true).push(
+                                  MaterialPageRoute<void>(
+                                    builder: (_) => LinksScreen(eventCode: e.code, eventName: e.name),
+                                  ),
+                                ),
+                                icon: const Icon(Icons.add_link),
+                                label: const Text('More links'),
+                                style: OutlinedButton.styleFrom(minimumSize: const Size(0, 48)),
                               ),
                               OutlinedButton.icon(
                                 onPressed: _busy
