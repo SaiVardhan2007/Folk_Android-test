@@ -1,0 +1,153 @@
+class Person {
+  const Person({
+    required this.mob,
+    required this.name,
+    this.id = '',
+    this.gender = '',
+    this.level = '',
+    this.occupation = '',
+    this.profession = '',
+    this.pgName = '',
+    this.eventCode = '',
+    this.tag = 'Public',
+    this.isActive = true,
+    this.attendanceCount = 0,
+    this.lastAttendedOn = '',
+    this.registeredBy = '',
+    this.joined = '',
+    this.hasPassword = true,
+    this.venue = '',
+    this.gmapLink = '',
+    this.callNo = '',
+    this.fgName = '',
+    this.fgMob = '',
+  });
+
+  final String id, mob, name, gender, level, occupation, profession, pgName, eventCode, tag, lastAttendedOn, registeredBy, joined;
+  final String venue, gmapLink, callNo, fgName, fgMob;
+  final bool isActive, hasPassword;
+  final int attendanceCount;
+
+  bool get isAdmin => tag == 'Admin';
+  bool get isStaff => tag == 'Admin' || tag == 'Coordinator';
+
+  /// Signed up but not yet approved by an admin.
+  bool get isPending => !isActive && hasPassword;
+
+  factory Person.fromJson(Map<String, dynamic> j) => Person(
+    id: j['id'] as String? ?? '',
+    mob: j['mob'] as String? ?? '',
+    name: j['name'] as String? ?? '',
+    gender: j['gender'] as String? ?? '',
+    level: j['level'] as String? ?? '',
+    occupation: j['occupation'] as String? ?? '',
+    profession: j['profession'] as String? ?? '',
+    pgName: j['pg_name'] as String? ?? '',
+    eventCode: j['event_code'] as String? ?? '',
+    tag: j['tag'] as String? ?? 'Public',
+    isActive: j['is_active'] as bool? ?? true,
+    attendanceCount: (j['attendance_count'] as num?)?.toInt() ?? 0,
+    lastAttendedOn: j['last_attended_on'] as String? ?? '',
+    registeredBy: j['registered_by'] as String? ?? '',
+    joined: j['joined'] as String? ?? '',
+    hasPassword: j['has_password'] as bool? ?? true,
+    venue: j['venue'] as String? ?? '',
+    gmapLink: j['gmap_link'] as String? ?? '',
+    callNo: j['call_no'] as String? ?? '',
+    fgName: j['fg_name'] as String? ?? '',
+    fgMob: j['fg_mob'] as String? ?? '',
+  );
+
+  Map<String, dynamic> toJson() => {
+    'id': id,
+    'mob': mob,
+    'name': name,
+    'gender': gender,
+    'level': level,
+    'occupation': occupation,
+    'profession': profession,
+    'pg_name': pgName,
+    'event_code': eventCode,
+    'tag': tag,
+    'is_active': isActive,
+    'attendance_count': attendanceCount,
+    'last_attended_on': lastAttendedOn,
+    'registered_by': registeredBy,
+    'joined': joined,
+    'venue': venue,
+    'gmap_link': gmapLink,
+    'call_no': callNo,
+    'fg_name': fgName,
+    'fg_mob': fgMob,
+  };
+}
+
+class FolkEvent {
+  const FolkEvent(this.code, this.name, this.isCurrent);
+  final String code, name;
+  final bool isCurrent;
+  factory FolkEvent.fromJson(Map<String, dynamic> j) =>
+      FolkEvent(j['code'] as String, j['name'] as String? ?? j['code'] as String, j['is_current'] as bool? ?? false);
+  Map<String, dynamic> toJson() => {'code': code, 'name': name, 'is_current': isCurrent};
+}
+
+/// Everything the app needs at start-up (one API call, cached for offline use).
+class Bootstrap {
+  const Bootstrap({
+    required this.user,
+    required this.events,
+    required this.currentEvent,
+    required this.tags,
+    required this.levels,
+    required this.genders,
+    required this.occupations,
+    this.offlineEnabled = false,
+  });
+  final Person user;
+  final List<FolkEvent> events;
+  final String currentEvent;
+  final List<String> tags, levels, genders, occupations;
+
+  /// Admin switch (Admin → Settings): lets check-ins be saved on the phone when there is no signal.
+  final bool offlineEnabled;
+
+  factory Bootstrap.fromJson(Map<String, dynamic> j) {
+    List<String> list(String k) => ((j[k] as List?) ?? const []).map((e) => e.toString()).toList();
+    return Bootstrap(
+      user: Person.fromJson(Map<String, dynamic>.from(j['user'] as Map)),
+      events: ((j['events'] as List?) ?? const []).map((e) => FolkEvent.fromJson(Map<String, dynamic>.from(e as Map))).toList(),
+      currentEvent: j['current_event'] as String? ?? '',
+      tags: list('tags'),
+      levels: list('levels'),
+      genders: list('genders'),
+      occupations: list('occupations'),
+      offlineEnabled: ((j['settings'] as Map?)?['offline_queue_enabled'] as bool?) ?? false,
+    );
+  }
+}
+
+class AttendanceItem {
+  const AttendanceItem({
+    required this.id,
+    required this.mob,
+    required this.name,
+    required this.markedBy,
+    required this.markedByMob,
+    required this.ts,
+  });
+  final String id, mob, name, markedBy, markedByMob, ts;
+  factory AttendanceItem.fromJson(Map<String, dynamic> j) => AttendanceItem(
+    id: j['id'] as String,
+    mob: j['mob'] as String? ?? '',
+    name: j['name'] as String? ?? '',
+    markedBy: j['marked_by'] as String? ?? '',
+    markedByMob: j['marked_by_mob'] as String? ?? '',
+    ts: j['ts'] as String? ?? '',
+  );
+}
+
+String genderLabel(String g) => g == 'M'
+    ? 'Male'
+    : g == 'F'
+    ? 'Female'
+    : '';

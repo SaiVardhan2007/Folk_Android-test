@@ -1,0 +1,20 @@
+{
+  "$schema": "node_modules/wrangler/config-schema.json",
+  "name": "folk-api",
+  "main": "src/index.ts",
+  "compatibility_date": "2026-09-01",
+  "compatibility_flags": ["nodejs_compat"],
+  // Non-secret settings. Secrets (ERPNEXT_API_KEY, ERPNEXT_API_SECRET, JWT_SECRET, WHATSAPP_API_KEY) are set with `wrangler secret put`.
+  "vars": {
+    "ERPNEXT_URL": "https://erp.hkmh.in",
+    "MAIN_ADMIN_MOB": "9133318576",
+    "WHATSAPP_URL": "https://kycapi.finanalyz.com/api/send-template-message",
+    "WHATSAPP_PHONE_NUMBER_ID": "598435813347675"
+  },
+  "keep_vars": true,
+  // Brute-force protection for login/sign-up (per IP, shared across all Cloudflare locations).
+  "ratelimits": [
+    { "name": "AUTH_LIMITER", "namespace_id": "1001", "simple": { "limit": 20, "period": 60 } }
+  ],
+  "observability": { "enabled": true }
+}
