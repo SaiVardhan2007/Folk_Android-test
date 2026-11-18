@@ -1,3 +1,5 @@
+import '../features/printing/receipt_format.dart';
+
 class Person {
   const Person({
     required this.mob,
@@ -102,6 +104,7 @@ class Bootstrap {
     required this.genders,
     required this.occupations,
     this.offlineEnabled = false,
+    this.receipt = const ReceiptFormat(),
   });
   final Person user;
   final List<FolkEvent> events;
@@ -110,6 +113,9 @@ class Bootstrap {
 
   /// Admin switch (Admin → Settings): lets check-ins be saved on the phone when there is no signal.
   final bool offlineEnabled;
+
+  /// What the printed attendance receipt shows (Admin → Settings → Receipt format).
+  final ReceiptFormat receipt;
 
   factory Bootstrap.fromJson(Map<String, dynamic> j) {
     List<String> list(String k) => ((j[k] as List?) ?? const []).map((e) => e.toString()).toList();
@@ -122,6 +128,7 @@ class Bootstrap {
       genders: list('genders'),
       occupations: list('occupations'),
       offlineEnabled: ((j['settings'] as Map?)?['offline_queue_enabled'] as bool?) ?? false,
+      receipt: ReceiptFormat.fromJson(((j['settings'] as Map?)?['receipt'] as Map?)?.cast<String, dynamic>()),
     );
   }
 }

@@ -93,7 +93,21 @@ app.get("/", (c) => c.json({ ok: true, service: "folk-api" }));
 app.get("/health", (c) => c.json({ ok: true, time: istNow() }));
 
 // ---------- admin-controlled settings (FOLK Settings, a single record)
-type Settings = { offline_queue_enabled: boolean; auto_approve_signups: boolean; whatsapp_enabled: boolean; notify_coordinator_attendance: boolean; welcome_template: string; attendance_template: string; current_event: string };
+/** What is printed on the attendance receipt. Edited in Admin → Settings, used by every phone. */
+type ReceiptFormat = { title: string; subtitle: string; footer: string; show_event: boolean; show_phone: boolean; show_time: boolean; show_count: boolean; show_marked_by: boolean };
+const RECEIPT_DEFAULT: ReceiptFormat = { title: "FOLK", subtitle: "Attendance Receipt", footer: "Hare Krishna!", show_event: true, show_phone: true, show_time: true, show_count: true, show_marked_by: false };
+const RECEIPT_FLAGS = ["show_event", "show_phone", "show_time", "show_count", "show_marked_by"] as const;
+const RECEIPT_TEXTS = ["title", "subtitle", "footer"] as const;
+function receiptFrom(raw: unknown): ReceiptFormat {
+  let o: Record<string, unknown> = {};
+  try { const v = typeof raw === "string" && raw ? JSON.parse(raw) : raw; if (v && typeof v === "object") o = v as Record<string, unknown>; } catch { /* use defaults */ }
+  const out = { ...RECEIPT_DEFAULT };
+  for (const k of RECEIPT_TEXTS) if (typeof o[k] === "string") out[k] = (o[k] as string).trim().slice(0, 60);
+  for (const k of RECEIPT_FLAGS) if (typeof o[k] === "boolean") out[k] = o[k] as boolean;
+  return out;
+}
+
+type Settings = { offline_queue_enabled: boolean; auto_approve_signups: boolean; whatsapp_enabled: boolean; notify_coordinator_attendance: boolean; welcome_template: string; attendance_template: string; current_event: string; receipt: ReceiptFormat };
 const loadSettings = (c: Ctx): Promise<Settings> =>
   cached("settings", 15_000, async () => {
     const r = (await erpOf(c).get<Record<string, unknown>>("FOLK Settings", "FOLK Settings")) ?? {};
@@ -102,6 +116,7 @@ const loadSettings = (c: Ctx): Promise<Settings> =>
       whatsapp_enabled: !!r.whatsapp_enabled, notify_coordinator_attendance: !!r.notify_coordinator_attendance,
       welcome_template: String(r.welcome_template || "event_registration"), attendance_template: String(r.attendance_template || "coordinator_attendance"),
       current_event: String(r.current_event ?? ""),
+      receipt: receiptFrom(r.receipt_format),
     };
   });
 
@@ -270,7 +285,7 @@ app.get("/bootstrap", async (c) => {
   return c.json({
     user: r ? publicPerson(r) : null, events, current_event: events.find((e) => e.is_current)?.code ?? events[0]?.code ?? "",
     tags, levels: LEVELS, genders: GENDERS, occupations: OCCUPATIONS, today: istToday(),
-    settings: { offline_queue_enabled: settings.offline_queue_enabled },
+    settings: { offline_queue_enabled: settings.offline_queue_enabled, receipt: settings.receipt },
   });
 });
 app.get("/events", async (c) => c.json({ events: await loadEvents(c) }));
@@ -607,6 +622,10 @@ app.put("/admin/settings", async (c) => {
     const v = b[k].trim();
     if (!/^[a-z0-9_]{1,60}$/.test(v)) throw bad("A template name uses only small letters, digits and underscores, exactly as in your WhatsApp account.");
     patch[k] = v;
+  }
+  if (b.receipt && typeof b.receipt === "object") {
+    const cur = (await loadSettings(c)).receipt;
+    patch.receipt_format = JSON.stringify(receiptFrom({ ...cur, ...(b.receipt as Record<string, unknown>) }));
   }
   if (!Object.keys(patch).length) throw bad("Nothing to change.");
   await erpOf(c).update("FOLK Settings", "FOLK Settings", patch);

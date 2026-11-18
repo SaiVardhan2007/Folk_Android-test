@@ -12,6 +12,10 @@ import '../../core/theme.dart';
 import '../../core/util.dart';
 import '../../core/widgets.dart';
 import '../auth/auth_controller.dart';
+import '../printing/printer_service.dart';
+import '../printing/printer_sheet.dart';
+import '../printing/receipt_format.dart';
+import '../printing/receipt_renderer.dart';
 import '../register/person_form.dart';
 import 'attendance_repo.dart';
 import '../../core/layout.dart';
@@ -158,33 +162,46 @@ class _AttendanceScreenState extends ConsumerState<AttendanceScreen> with Widget
     }
   }
 
-  Future<void> _mark({required bool isNew}) async {
+  /// Marks the person present (once a day: the server says "already" for a repeat).
+  /// With [print] it also prints the receipt, and if the person was already marked it only prints.
+  Future<void> _mark({required bool isNew, bool print = false}) async {
     final event = ref.read(selectedEventProvider);
     final mob = _person?.mob ?? _newMob;
     if (event == null || mob == null) return;
     if (isNew && !_formKey.currentState!.validate()) return;
     _busyN.value = true;
     try {
+      // Printer first, so a receipt button never marks someone and then has nowhere to print.
+      if (print && !await ensurePrinter(context, ref.read(printerServiceProvider))) {
+        if (mounted) showMessage(context, 'Printer not connected. Nothing was marked.', error: true);
+        return;
+      }
       final f = _form.toJson();
+      final label = _person?.name ?? _form.name.text.trim();
       final r = await ref
           .read(attendanceRepoProvider)
           .mark(
             mob: mob,
             event: event,
-            label: _person?.name ?? _form.name.text.trim(),
+            label: label,
             edits: (isNew || _offlinePerson) ? null : f,
             register: isNew ? f : null,
             allowQueue: ref.read(bootstrapProvider).value?.offlineEnabled ?? false,
           );
       if (!mounted) return;
       HapticFeedback.mediumImpact();
+      var printed = false;
+      if (print) printed = await _printReceipt(event, mob, r, _person?.attendanceCount ?? 0);
+      if (!mounted) return;
+      final who = r.name.isEmpty ? mob : r.name;
       if (r.queued) {
-        showMessage(context, '${r.name.isEmpty ? mob : r.name} saved offline. It will be sent automatically.');
+        showMessage(context, '$who saved offline. It will be sent automatically.${printed ? ' Receipt printed.' : ''}');
         ref.read(pendingCountProvider.notifier).refresh();
       } else if (r.status == 'already') {
-        showMessage(context, '${r.name} is already marked present today.');
+        showMessage(context, printed ? '$who was already marked today. Receipt printed.' : '$who is already marked present today.');
       } else {
-        showMessage(context, '${r.registered ? 'Registered and marked' : 'Marked present'}: ${r.name}');
+        final base = '${r.registered ? 'Registered and marked' : 'Marked present'}: $who';
+        showMessage(context, printed ? '$base. Receipt printed.' : base);
       }
       ref.invalidate(todayProvider(event));
       _reset();
@@ -193,6 +210,47 @@ class _AttendanceScreenState extends ConsumerState<AttendanceScreen> with Widget
     } finally {
       if (mounted) _busyN.value = false;
     }
+  }
+
+  /// Prints the receipt. Returns false (with a message) if the printer failed; the check-in itself is already saved,
+  /// and pressing "Mark & Print Receipt" again prints without marking twice.
+  Future<bool> _printReceipt(String event, String mob, MarkResult r, int countBefore) async {
+    final printer = ref.read(printerServiceProvider);
+    final boot = ref.read(bootstrapProvider).value;
+    var ts = r.ts;
+    if (r.status == 'already') {
+      // Show when they were really marked, not the time of this second tap.
+      try {
+        final today = await ref.read(attendanceRepoProvider).today(event);
+        ts = today.where((x) => x.mob == mob).map((x) => x.ts).firstOrNull ?? ts;
+      } on ApiException {
+        // keep the current time
+      }
+    }
+    final eventName = boot?.events.where((e) => e.code == event).map((e) => e.name).firstOrNull ?? event;
+    final data = ReceiptData(
+      name: r.name,
+      mob: mob,
+      event: eventName,
+      ts: ts,
+      // A fresh check-in adds one to the count read before marking; "already" is counted in it.
+      count: r.status == 'already' ? countBefore : countBefore + 1,
+      markedBy: ref.read(authProvider).value?.name ?? '',
+    );
+    final image = await renderReceipt(boot?.receipt ?? const ReceiptFormat(), data);
+    for (var attempt = 0; attempt < 2; attempt++) {
+      try {
+        await printer.printImage(image);
+        return true;
+      } on PrinterException catch (e) {
+        await printer.disconnect(); // the link is stale (printer off / out of range): reconnect or ask
+        if (attempt == 1 || !mounted || !await ensurePrinter(context, printer)) {
+          if (mounted) showMessage(context, 'Could not print: ${e.message}. Press "Mark & Print Receipt" to try again.', error: true);
+          return false;
+        }
+      }
+    }
+    return false;
   }
 
   Future<void> _undo(AttendanceItem item, String event) async {
@@ -363,8 +421,14 @@ class _AttendanceScreenState extends ConsumerState<AttendanceScreen> with Widget
               icon: _busyN.value
                   ? const SizedBox(height: 22, width: 22, child: CircularProgressIndicator(strokeWidth: 3))
                   : const Icon(Icons.check_circle_outline),
-              label: Text(isNew ? 'Register & mark present' : 'Mark present'),
+              label: Text(isNew ? 'Register & Mark Attendance' : 'Mark Attendance'),
               style: FilledButton.styleFrom(backgroundColor: context.colors.success),
+            ),
+            const SizedBox(height: kGapS),
+            OutlinedButton.icon(
+              onPressed: _busyN.value ? null : () => _mark(isNew: isNew, print: true),
+              icon: const Icon(Icons.print_outlined),
+              label: Text(isNew ? 'Register, Mark & Print Receipt' : 'Mark & Print Receipt'),
             ),
           ],
         ),

@@ -3,7 +3,13 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import '../../core/api.dart';
 import '../../core/widgets.dart';
+import '../../core/layout.dart';
+import '../../core/util.dart';
 import '../auth/auth_controller.dart';
+import '../printing/printer_service.dart';
+import '../printing/printer_sheet.dart';
+import '../printing/receipt_format.dart';
+import '../printing/receipt_renderer.dart';
 import 'admin_repo.dart';
 
 final _settingsProvider = FutureProvider.autoDispose<Map<String, dynamic>>((ref) => ref.read(adminRepoProvider).settings());
@@ -105,6 +111,24 @@ class SettingsTab extends ConsumerWidget {
             onSave: (k, v) => _setText(context, ref, k, v),
           ),
         ],
+        const SizedBox(height: 16),
+        Text('Receipt format', style: text.titleLarge),
+        const SizedBox(height: 4),
+        Text(
+          'What the "Mark & Print Receipt" button prints on the Bluetooth or USB thermal printer. '
+          'Everyone\'s phone uses this layout after it next opens the app.',
+          style: text.bodyMedium,
+        ),
+        const SizedBox(height: 12),
+        if (s.hasValue)
+          _ReceiptEditor(
+            key: ValueKey(s.value!['receipt'].toString()),
+            initial: ReceiptFormat.fromJson((s.value!['receipt'] as Map?)?.cast<String, dynamic>()),
+            onSaved: () {
+              ref.invalidate(_settingsProvider);
+              ref.invalidate(bootstrapProvider);
+            },
+          ),
       ],
     );
   }
@@ -155,5 +179,137 @@ class _TemplateNameState extends State<_TemplateName> {
         child: FilledButton(onPressed: () => widget.onSave(widget.setting, _c.text), child: const Text('Save')),
       ),
     ],
+  );
+}
+
+class _ReceiptEditor extends ConsumerStatefulWidget {
+  const _ReceiptEditor({super.key, required this.initial, required this.onSaved});
+  final ReceiptFormat initial;
+  final VoidCallback onSaved;
+
+  @override
+  ConsumerState<_ReceiptEditor> createState() => _ReceiptEditorState();
+}
+
+class _ReceiptEditorState extends ConsumerState<_ReceiptEditor> {
+  late final _title = TextEditingController(text: widget.initial.title);
+  late final _subtitle = TextEditingController(text: widget.initial.subtitle);
+  late final _footer = TextEditingController(text: widget.initial.footer);
+  late bool _event = widget.initial.showEvent, _phone = widget.initial.showPhone, _time = widget.initial.showTime;
+  late bool _count = widget.initial.showCount, _by = widget.initial.showMarkedBy;
+  bool _busy = false;
+
+  @override
+  void dispose() {
+    _title.dispose();
+    _subtitle.dispose();
+    _footer.dispose();
+    super.dispose();
+  }
+
+  ReceiptFormat get _format => ReceiptFormat(
+    title: _title.text.trim(),
+    subtitle: _subtitle.text.trim(),
+    footer: _footer.text.trim(),
+    showEvent: _event,
+    showPhone: _phone,
+    showTime: _time,
+    showCount: _count,
+    showMarkedBy: _by,
+  );
+
+  Future<void> _save() async {
+    setState(() => _busy = true);
+    try {
+      await ref.read(adminRepoProvider).saveSettings({'receipt': _format.toJson()});
+      widget.onSaved();
+      if (mounted) showMessage(context, 'Receipt format saved');
+    } on ApiException catch (e) {
+      if (mounted) showMessage(context, e.message, error: true);
+    } finally {
+      if (mounted) setState(() => _busy = false);
+    }
+  }
+
+  /// Prints a sample with the values on screen (saved or not), connecting the printer first if needed.
+  Future<void> _test() async {
+    final printer = ref.read(printerServiceProvider);
+    if (!await ensurePrinter(context, printer)) return;
+    setState(() => _busy = true);
+    try {
+      final image = await renderReceipt(
+        _format,
+        ReceiptData(name: 'Sample Name', mob: '9876543210', event: 'Sunday Programme', ts: istTimestamp(), count: 3, markedBy: 'Volunteer'),
+      );
+      await printer.printImage(image);
+    } on PrinterException catch (e) {
+      await printer.disconnect();
+      if (mounted) showMessage(context, 'Could not print: ${e.message}', error: true);
+    } finally {
+      if (mounted) setState(() => _busy = false);
+    }
+  }
+
+  @override
+  Widget build(BuildContext context) => Card(
+    child: Padding(
+      padding: const EdgeInsets.all(kGapL),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.stretch,
+        children: [
+          TextField(
+            controller: _title,
+            maxLength: 60,
+            decoration: const InputDecoration(labelText: 'Heading', helperText: 'Big text at the top, for example your centre name'),
+          ),
+          const SizedBox(height: kGapS),
+          TextField(
+            controller: _subtitle,
+            maxLength: 60,
+            decoration: const InputDecoration(labelText: 'Sub-heading'),
+          ),
+          const SizedBox(height: kGapS),
+          TextField(
+            controller: _footer,
+            maxLength: 60,
+            decoration: const InputDecoration(labelText: 'Footer message'),
+          ),
+          SwitchListTile(
+            contentPadding: EdgeInsets.zero,
+            value: _phone,
+            onChanged: (v) => setState(() => _phone = v),
+            title: const Text('Show phone number'),
+          ),
+          SwitchListTile(
+            contentPadding: EdgeInsets.zero,
+            value: _event,
+            onChanged: (v) => setState(() => _event = v),
+            title: const Text('Show event name'),
+          ),
+          SwitchListTile(
+            contentPadding: EdgeInsets.zero,
+            value: _time,
+            onChanged: (v) => setState(() => _time = v),
+            title: const Text('Show date and time'),
+          ),
+          SwitchListTile(
+            contentPadding: EdgeInsets.zero,
+            value: _count,
+            onChanged: (v) => setState(() => _count = v),
+            title: const Text('Show how many times attended'),
+          ),
+          SwitchListTile(
+            contentPadding: EdgeInsets.zero,
+            value: _by,
+            onChanged: (v) => setState(() => _by = v),
+            title: const Text('Show who marked it'),
+          ),
+          const SizedBox(height: kGapS),
+          FilledButton.icon(onPressed: _busy ? null : _save, icon: const Icon(Icons.save_outlined), label: const Text('Save receipt format')),
+          const SizedBox(height: kGapS),
+          OutlinedButton.icon(onPressed: _busy ? null : _test, icon: const Icon(Icons.print_outlined), label: const Text('Print a test receipt')),
+        ],
+      ),
+    ),
   );
 }
