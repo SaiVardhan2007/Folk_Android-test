@@ -94,11 +94,11 @@ reg_skill_ids = {}
 for row in load("registration_skills"): reg_skill_ids.setdefault(row["registration_id"], set()).add(row["skill_id"])
 for row in load("krishnashtami_registration_skills"): reg_skill_ids.setdefault(row["registration_id"], set()).add(row["skill_id"])
 
-OCC = {"student": "Student", "working": "Working", "job": "Working", "business": "Business", "others": "Others", "job search": "Job Search"}
+OCC = {"student": "Student", "working": "Working", "business": "Business", "others": "Others", "job search": "Job Search"}
 def occupation(v):
     v = txt(v).lower()
     if not v: return ""
-    return OCC.get(v, "Working")  # free-text professions (Software, Civil engineer ...) are all working people
+    return OCC.get(v, "")  # free text (Software, Civil engineer ...) is NOT guessed: it is kept in comments instead
 
 for r in sorted(regs, key=lambda x: x["created_at"]):
     p = phone(r["phone"])
@@ -139,7 +139,7 @@ for m in sorted(masters, key=lambda x: x["created_at"]):
         "age": age if isinstance(age, int) and 1 <= age <= 120 else None, "current_stay": e.get("current_stay", ""),
         "skills": ", ".join(sorted(e["skills"]))[:200], "interests": ", ".join(sorted(e["interests"]))[:200],
         "chanting_rounds": m.get("chanting") or None, "feedback": e.get("feedback", ""), "comments": e.get("comments", ""),
-        "attendance_count": m.get("classes_attended") or 0, "not_interested": 1 if m.get("is_not_interested") else 0,
+        "registered_on": ist(m["created_at"])[:10], "attendance_count": m.get("classes_attended") or 0, "not_interested": 1 if m.get("is_not_interested") else 0,
     }
     people[p] = {k: v for k, v in doc.items() if v not in ("", None)}
 

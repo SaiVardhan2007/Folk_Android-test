@@ -8,6 +8,7 @@ export type Bindings = {
   WHATSAPP_URL: string;
   WHATSAPP_PHONE_NUMBER_ID: string;
   AUTH_LIMITER?: { limit(o: { key: string }): Promise<{ success: boolean }> };
+  PUBLIC_LIMITER?: { limit(o: { key: string }): Promise<{ success: boolean }> };
 };
 
 export type Session = { id: string; mob: string; name: string; tag: string };

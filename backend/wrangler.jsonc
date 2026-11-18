@@ -14,7 +14,9 @@
   "keep_vars": true,
   // Brute-force protection for login/sign-up (per IP, shared across all Cloudflare locations).
   "ratelimits": [
-    { "name": "AUTH_LIMITER", "namespace_id": "1001", "simple": { "limit": 20, "period": 60 } }
+    { "name": "AUTH_LIMITER", "namespace_id": "1001", "simple": { "limit": 20, "period": 60 } },
+    // Public registration pages: lookups and submissions per IP (stops number-guessing and spam).
+    { "name": "PUBLIC_LIMITER", "namespace_id": "1002", "simple": { "limit": 30, "period": 60 } }
   ],
   "observability": { "enabled": true }
 }

@@ -2,7 +2,7 @@
 import type { Erp, Filters } from "./erp";
 import { LEVELS } from "./types";
 
-type P = { name: string; mob_no: string; full_name: string; gender?: string; level?: string; pg_name?: string; profession?: string; event_code?: string; user_tag?: string; registered_by?: string; creation: string };
+type P = { name: string; mob_no: string; full_name: string; gender?: string; level?: string; pg_name?: string; profession?: string; event_code?: string; user_tag?: string; registered_by?: string; registered_on?: string; creation: string };
 type A = { person: string; event_code: string; attendance_date: string; marked_by: string };
 export type Filter = { from: string; to: string; event: string; level: string; gender: string };
 
@@ -49,7 +49,7 @@ export async function analytics(erp: Erp, f: Filter, tags: string[]) {
   if (f.event) rowFilters.push(["event_code", "=", f.event]);
 
   const [everyone, rowsAll] = await Promise.all([
-    erp.list<P>("FOLK Users", ["name", "mob_no", "full_name", "gender", "level", "pg_name", "profession", "event_code", "user_tag", "registered_by", "creation"]),
+    erp.list<P>("FOLK Users", ["name", "mob_no", "full_name", "gender", "level", "pg_name", "profession", "event_code", "user_tag", "registered_by", "creation", "registered_on"]),
     erp.list<A>("FOLK Attendance", ["person", "event_code", "attendance_date", "marked_by"], rowFilters),
   ]);
 
@@ -60,7 +60,7 @@ export async function analytics(erp: Erp, f: Filter, tags: string[]) {
 
   const attendedSet = new Set(rows.map((r) => r.person));
   const attendedInScope = scope.filter((p) => attendedSet.has(p.name)).length;
-  const inRange = (p: P) => (!f.from || day(p.creation) >= f.from) && (!f.to || day(p.creation) <= f.to);
+  const inRange = (p: P) => (!f.from || day(p.registered_on || p.creation) >= f.from) && (!f.to || day(p.registered_on || p.creation) <= f.to);
   const perPerson = group(rows, (r) => r.person);
   const times = [...perPerson.values()].map((v) => v.length);
   const freq = (n: number) => times.filter((t) => (n === 4 ? t >= 4 : t === n)).length;

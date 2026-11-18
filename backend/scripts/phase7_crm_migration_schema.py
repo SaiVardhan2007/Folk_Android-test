@@ -72,6 +72,7 @@ USER_FIELDS = [
     {"fieldname": "feedback", "label": "Feedback", "fieldtype": "Select", "options": "\nExcellent\nGood"},
     {"fieldname": "comments", "label": "Comments", "fieldtype": "Small Text"},
     {"fieldname": "not_interested", "label": "Not interested", "fieldtype": "Check", "default": "0", "search_index": 1},
+    {"fieldname": "registered_on", "label": "Registered on", "fieldtype": "Date", "search_index": 1, "description": "First registration date (kept from the old system for imported contacts)"},
 ]
 LEVEL_OPTIONS = "\nAOMC\nFolk Foundation\nFolk Prelims\nEnhance"
 OCCUPATION_OPTIONS = "\nStudent\nJob Search\nWorking\nBusiness\nOthers"

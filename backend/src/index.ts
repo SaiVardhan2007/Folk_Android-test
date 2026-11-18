@@ -6,6 +6,7 @@ import { hashPassword, verifyPassword, sha256Hex, randomCode, signToken, verifyT
 import { analytics } from "./analytics";
 import { attendanceAlert, buildMessages, sendTemplate } from "./whatsapp";
 import { buildRows, guessMapping, IMPORT_FIELDS, ImportError, loadSheetCsv, MAX_IMPORT_BYTES, MAX_IMPORT_ROWS, parseCsv, type ImportField, type ImportRow, type Mapping } from "./importer";
+import { notFoundPage, pageHeaders, renderPage, type PageConfig } from "./publicPage";
 import { distribute, FOLLOW_UP, NOTE_REQUIRED, PENDING, POSITIVE, STATUSES, type Coord } from "./calls";
 import { DEFAULT_TAGS, DONATIONS, FEEDBACKS, GENDERS, LEVELS, MIN_PASSWORD, OCCUPATIONS, STAYS, type Bindings, type Session, type Vars } from "./types";
 
@@ -19,6 +20,7 @@ const ASG = "FOLK Assignment";
 const LOG = "FOLK Call Log";
 const REG = "FOLK Registration";
 const ACT = "FOLK Activity Log";
+const LINK = "FOLK Form Link";
 const PAGE_SIZE = 25;
 
 // ---------- small helpers
@@ -54,11 +56,11 @@ const erpOf = (c: Ctx) => new Erp(c.env);
 type Row = {
   name: string; mob_no: string; full_name: string; gender?: string; level?: string; occupation?: string; profession?: string; pg_name?: string;
   event_code?: string; user_tag?: string; is_active?: number; attendance_count?: number; last_attended_on?: string | null;
-  registered_by?: string; password_hash?: string; reset_code_hash?: string; reset_code_expires?: string; creation?: string;
-  venue?: string; gmap_link?: string; call_no?: string; fg_name?: string; fg_mob_no?: string;
+  registered_by?: string; password_hash?: string; reset_code_hash?: string; reset_code_expires?: string; creation?: string; registered_on?: string;
+  venue?: string; gmap_link?: string; call_no?: string; fg_name?: string; fg_mob_no?: string; folk_guide?: string;
   age?: number; current_stay?: string; skills?: string; interests?: string; chanting_rounds?: number; feedback?: string; comments?: string; not_interested?: number;
 };
-const PERSON_FIELDS = ["name", "mob_no", "full_name", "gender", "level", "occupation", "profession", "pg_name", "event_code", "user_tag", "is_active", "attendance_count", "last_attended_on", "registered_by", "creation", "venue", "gmap_link", "call_no", "fg_name", "fg_mob_no", "age", "current_stay", "skills", "interests", "chanting_rounds", "feedback", "comments", "not_interested"];
+const PERSON_FIELDS = ["name", "mob_no", "full_name", "gender", "level", "occupation", "profession", "pg_name", "event_code", "user_tag", "is_active", "attendance_count", "last_attended_on", "registered_by", "creation", "venue", "gmap_link", "call_no", "fg_name", "fg_mob_no", "folk_guide", "registered_on", "age", "current_stay", "skills", "interests", "chanting_rounds", "feedback", "comments", "not_interested"];
 const AUTH_FIELDS = [...PERSON_FIELDS, "password_hash", "reset_code_hash", "reset_code_expires"];
 
 /** What the app is allowed to see about a person. Never includes any hash. */
@@ -66,8 +68,8 @@ const publicPerson = (r: Row) => ({
   id: r.name, mob: r.mob_no, name: r.full_name, gender: r.gender ?? "", level: r.level ?? "", occupation: r.occupation ?? "",
   profession: r.profession ?? "", pg_name: r.pg_name ?? "", event_code: r.event_code ?? "", tag: r.user_tag || "Public",
   is_active: r.is_active !== 0, attendance_count: r.attendance_count ?? 0, last_attended_on: r.last_attended_on ?? "",
-  registered_by: r.registered_by ?? "", joined: (r.creation ?? "").slice(0, 10),
-  venue: r.venue ?? "", gmap_link: r.gmap_link ?? "", call_no: r.call_no ?? "", fg_name: r.fg_name ?? "", fg_mob: r.fg_mob_no ?? "",
+  registered_by: r.registered_by ?? "", joined: (r.registered_on || r.creation || "").slice(0, 10),
+  venue: r.venue ?? "", gmap_link: r.gmap_link ?? "", call_no: r.call_no ?? "", fg_name: r.fg_name ?? "", fg_mob: r.fg_mob_no ?? "", folk_guide: r.folk_guide ?? "",
   age: r.age ?? 0, current_stay: r.current_stay ?? "", skills: r.skills ?? "", interests: r.interests ?? "", chanting_rounds: r.chanting_rounds ?? 0,
   feedback: r.feedback ?? "", comments: r.comments ?? "", not_interested: !!r.not_interested,
 });
@@ -101,7 +103,7 @@ app.get("/health", (c) => c.json({ ok: true, time: istNow() }));
 type Body = Record<string, unknown>;
 const str = (v: unknown) => (typeof v === "string" || typeof v === "number" ? String(v).slice(0, 120) : "");
 /** [method, path pattern, what it is called in the log, optional safe detail]. Passwords, codes and keys are never recorded. */
-const ACTIVITY: [string, RegExp, string, ((b: Body) => string)?][] = [
+const ACTIVITY: [string, RegExp, string, ((b: Body, path: string) => string)?][] = [
   ["POST", /^\/auth\/login$/, "Signed in"],
   ["POST", /^\/auth\/signup$/, "Signed up", (b) => str(b.name)],
   ["POST", /^\/auth\/activate$/, "Set a new password with a code"],
@@ -111,11 +113,14 @@ const ACTIVITY: [string, RegExp, string, ((b: Body) => string)?][] = [
   ["DELETE", /^\/attendance\//, "Removed an attendance record"],
   ["POST", /^\/registrations$/, "Registered a person for an event", (b) => `event ${str(b.event)}`],
   ["POST", /^\/my\/calls\/[^/]+\/submit$/, "Logged a call", (b) => str(b.status)],
+  ["POST", /^\/pub\/[^/]+\/submit$/, "Registered through a public link"],
+  ["POST", /^\/admin\/links$/, "Created a registration link", (b) => str(b.title)],
+  ["PATCH", /^\/admin\/links\/[^/]+$/, "Changed a registration link", (b) => str(b.title)],
   ["PATCH", /^\/admin\/people\/\d+\/role$/, "Changed a role", (b) => str(b.tag)],
   ["PATCH", /^\/admin\/people\/\d+\/active$/, "Enabled or disabled an account", (b) => (b.active ? "enabled" : "disabled")],
   ["POST", /^\/admin\/people\/\d+\/reset$/, "Reset a password"],
   ["POST", /^\/admin\/events$/, "Added an event", (b) => str(b.name)],
-  ["POST", /^\/admin\/events\/[^/]+\/current$/, "Changed the current event"],
+  ["POST", /^\/admin\/events\/[^/]+\/current$/, "Changed the current event", (_b, path) => `now ${decodeURIComponent(path.split("/")[3] ?? "")}`],
   ["PUT", /^\/admin\/settings$/, "Changed settings", (b) => Object.keys(b).slice(0, 8).join(", ")],
   ["POST", /^\/admin\/assign$/, "Assigned calls", (b) => `event ${str(b.event)}`],
   ["POST", /^\/admin\/assign\/unassign$/, "Removed unstarted call assignments", (b) => `event ${str(b.event)}`],
@@ -140,7 +145,7 @@ async function activityLog(c: Ctx, next: () => Promise<void>) {
     const mob = /\/(\d{10})(\/|$)/.exec(c.req.path)?.[1] ?? normalizeMobile(b.mob) ?? "";
     const doc = {
       at: istNow(), user_id: who?.id ?? "", user_name: who?.name ?? str(b.name) ?? "", role: who?.tag ?? "Not signed in",
-      action: rule[2], target: extra?.target ?? mob, details: extra?.details ?? rule[3]?.(b) ?? "",
+      action: rule[2], target: extra?.target ?? mob, details: extra?.details ?? rule[3]?.(b, c.req.path) ?? "",
     };
     c.executionCtx.waitUntil(erpOf(c).insert(ACT, doc).catch((e) => console.error("activity log", e)));
   } catch (e) { console.error("activity log", e); }
@@ -162,11 +167,23 @@ function receiptFrom(raw: unknown): ReceiptFormat {
   return out;
 }
 
-type Settings = { offline_queue_enabled: boolean; auto_approve_signups: boolean; whatsapp_enabled: boolean; notify_coordinator_attendance: boolean; welcome_template: string; attendance_template: string; current_event: string; receipt: ReceiptFormat };
+/** App update notice. A phone whose build number is below `min_build` must update (cannot dismiss); below `latest_build` it is asked, once per launch. */
+type AppUpdate = { latest_build: number; min_build: number; url: string; message: string };
+const UPDATE_DEFAULT: AppUpdate = { latest_build: 0, min_build: 0, url: "", message: "" };
+function updateFrom(raw: unknown): AppUpdate {
+  let o: Record<string, unknown> = {};
+  try { const v = typeof raw === "string" && raw ? JSON.parse(raw) : raw; if (v && typeof v === "object") o = v as Record<string, unknown>; } catch { /* defaults */ }
+  const n = (v: unknown) => (Number.isInteger(v) && (v as number) >= 0 && (v as number) < 1_000_000 ? (v as number) : 0);
+  const url = typeof o.url === "string" && /^https:\/\//.test(o.url.trim()) ? o.url.trim().slice(0, 500) : "";
+  return { latest_build: n(o.latest_build), min_build: n(o.min_build), url, message: typeof o.message === "string" ? o.message.trim().slice(0, 300) : "" };
+}
+
+type Settings = { app_update: AppUpdate; offline_queue_enabled: boolean; auto_approve_signups: boolean; whatsapp_enabled: boolean; notify_coordinator_attendance: boolean; welcome_template: string; attendance_template: string; current_event: string; receipt: ReceiptFormat };
 const loadSettings = (c: Ctx): Promise<Settings> =>
   cached("settings", 15_000, async () => {
     const r = (await erpOf(c).get<Record<string, unknown>>("FOLK Settings", "FOLK Settings")) ?? {};
     return {
+      app_update: updateFrom(r.app_update),
       offline_queue_enabled: !!r.offline_queue_enabled, auto_approve_signups: !!r.auto_approve_signups,
       whatsapp_enabled: !!r.whatsapp_enabled, notify_coordinator_attendance: !!r.notify_coordinator_attendance,
       welcome_template: String(r.welcome_template || "event_registration"), attendance_template: String(r.attendance_template || "coordinator_attendance"),
@@ -249,7 +266,7 @@ app.post("/auth/signup", async (c) => {
   }
   if (!name) throw bad("Enter your name.");
   const d = details(b);
-  const doc = { mob_no: mob, full_name: name, ...d, user_tag: "Coordinator", is_active: approved ? 1 : 0, registered_by: "self sign-up", password_hash: hash };
+  const doc = { mob_no: mob, full_name: name, ...d, user_tag: "Coordinator", is_active: approved ? 1 : 0, registered_by: "self sign-up", registered_on: istToday(), password_hash: hash };
   let created: Row;
   try {
     created = (await erp.insert<Row>(PERSON, doc)).data;
@@ -322,12 +339,18 @@ const needStaff = (c: Ctx) => { if (!isStaff(c.get("session"))) throw new HttpEr
 
 for (const p of ["/me", "/bootstrap", "/events", "/home", "/people", "/people/*", "/attendance", "/attendance/*", "/my/*", "/registrations", "/admin/*", "/reports/*"]) app.use(p, requireSession);
 
+// ---------- app update notice (public: a phone must learn it is out of date even before sign-in)
+app.get("/app/update", async (c) => c.json({ update: (await loadSettings(c)).app_update }));
+
 // ---------- app start-up
-type EventRow = { name: string; event_name: string; is_current?: number };
+type EventRow = { name: string; event_name: string; is_current?: number; is_list?: number };
+/** Every FOLK Event row. `is_list` marks an always-open contact list (Feedback, Contacts Register) as opposed to a dated event. */
 const loadEvents = (c: Ctx) =>
   cached("events", 30_000, async () =>
-    (await erpOf(c).list<EventRow>("FOLK Event", ["name", "event_name", "is_current"], [], { order_by: "creation asc" }))
-      .map((e) => ({ code: e.name, name: e.event_name, is_current: !!e.is_current })));
+    (await erpOf(c).list<EventRow>("FOLK Event", ["name", "event_name", "is_current", "is_list"], [], { order_by: "creation asc" }))
+      .map((e) => ({ code: e.name, name: e.event_name, is_current: !!e.is_current && !e.is_list, is_list: !!e.is_list })));
+/** Events and contact lists, kept apart for the app. */
+const splitEvents = <T extends { is_list: boolean }>(all: T[]) => ({ events: all.filter((e) => !e.is_list), lists: all.filter((e) => e.is_list) });
 
 async function tagOptions(c: Ctx): Promise<string[]> {
   return cached("tags", 300_000, async () => {
@@ -348,14 +371,15 @@ app.get("/me", async (c) => {
 /** One call at app start: who I am, the events, and the allowed values for forms. */
 app.get("/bootstrap", async (c) => {
   const s = c.get("session");
-  const [events, tags, r, settings] = await Promise.all([loadEvents(c), tagOptions(c), getById(erpOf(c), s.id), loadSettings(c)]);
+  const [all, tags, r, settings] = await Promise.all([loadEvents(c), tagOptions(c), getById(erpOf(c), s.id), loadSettings(c)]);
+  const { events, lists } = splitEvents(all);
   return c.json({
-    user: r ? publicPerson(r) : null, events, current_event: events.find((e) => e.is_current)?.code ?? events[0]?.code ?? "",
+    user: r ? publicPerson(r) : null, events, lists, current_event: events.find((e) => e.is_current)?.code ?? events[0]?.code ?? "",
     tags, levels: LEVELS, genders: GENDERS, occupations: OCCUPATIONS, stays: STAYS, feedbacks: FEEDBACKS, today: istToday(),
     settings: { offline_queue_enabled: settings.offline_queue_enabled, receipt: settings.receipt },
   });
 });
-app.get("/events", async (c) => c.json({ events: await loadEvents(c) }));
+app.get("/events", async (c) => c.json(splitEvents(await loadEvents(c))));
 
 app.get("/home", async (c) => {
   const event = clean(c.req.query("event"), 60);
@@ -400,7 +424,7 @@ app.post("/people", async (c) => {
   if (!name) throw bad("Enter the name.");
   const d = details(b);
   if (!d.level) throw bad("Choose a level.");
-  const doc = { mob_no: mob, full_name: name, ...d, event_code: clean(b.event_code, 60) || undefined, user_tag: "Public", is_active: 1, registered_by: s.name };
+  const doc = { mob_no: mob, full_name: name, ...d, event_code: clean(b.event_code, 60) || undefined, user_tag: "Public", is_active: 1, registered_by: s.name, registered_on: istToday() };
   try {
     const r = await erpOf(c).insert<Row>(PERSON, doc);
     c.executionCtx.waitUntil(notifyNewContact(c, r.data).catch((e) => console.error("whatsapp", e)));
@@ -461,7 +485,7 @@ app.post("/attendance", async (c) => {
     const name = clean(b.name);
     const d = details(b);
     if (!name || !d.level) throw new HttpError(404, "This number is not registered. Add the name and level to register them.", { not_registered: true });
-    const doc = { mob_no: mob, full_name: name, ...d, event_code: event, user_tag: "Public", is_active: 1, registered_by: s.name };
+    const doc = { mob_no: mob, full_name: name, ...d, event_code: event, user_tag: "Public", is_active: 1, registered_by: s.name, registered_on: istToday() };
     try { person = (await erp.insert<Row>(PERSON, doc)).data; c.executionCtx.waitUntil(notifyNewContact(c, person).catch((e) => console.error("whatsapp", e))); } catch (e) { if (!isDuplicate(e)) throw e; person = await getRow(erp, mob); }
     registered = true;
   } else if (b.edits && typeof b.edits === "object") {
@@ -523,7 +547,7 @@ app.delete("/attendance/:id", async (c) => {
 
 // ---------- admin: people list
 const SORTS: Record<string, string> = {
-  newest: "creation desc", oldest: "creation asc", name: "full_name asc", most: "attendance_count desc", recent: "last_attended_on desc",
+  newest: "registered_on desc, creation desc", oldest: "registered_on asc, creation asc", name: "full_name asc", most: "attendance_count desc", recent: "last_attended_on desc",
 };
 
 function peopleQuery(q: Record<string, string | undefined>) {
@@ -538,8 +562,8 @@ function peopleQuery(q: Record<string, string | undefined>) {
   if (v("pending") === "1") { f.push(["is_active", "=", 0]); f.push(["password_hash", "!=", ""]); }
   if (v("att") === "yes") f.push(["attendance_count", ">", 0]);
   if (v("att") === "no") f.push(["attendance_count", "=", 0]);
-  if (DATE_RE.test(v("from"))) f.push(["creation", ">=", `${v("from")} 00:00:00`]);
-  if (DATE_RE.test(v("to"))) f.push(["creation", "<=", `${v("to")} 23:59:59`]);
+  if (DATE_RE.test(v("from"))) f.push(["registered_on", ">=", v("from")]);
+  if (DATE_RE.test(v("to"))) f.push(["registered_on", "<=", v("to")]);
   const s = v("q").replace(/[%_]/g, "");
   const or: Filters | undefined = s ? [["full_name", "like", `%${s}%`], ["mob_no", "like", `%${s}%`]] : undefined;
   return { filters: f, or_filters: or, order_by: SORTS[v("sort")] ?? SORTS.newest, page: Math.max(1, parseInt(v("page")) || 1) };
@@ -619,7 +643,7 @@ app.post("/admin/events", async (c) => {
   const code = clean(b.code, 40).toUpperCase().replace(/[^A-Z0-9_-]/g, "");
   if (!name || !code) throw bad("Enter an event code and name.");
   try {
-    await erpOf(c).insert("FOLK Event", { code, event_name: name });
+    await erpOf(c).insert("FOLK Event", { code, event_name: name, is_list: b.is_list === true ? 1 : 0 });
   } catch (e) {
     if (isDuplicate(e)) throw new HttpError(409, "An event with this code already exists.");
     throw e;
@@ -632,8 +656,10 @@ app.post("/admin/events/:code/current", async (c) => {
   needAdmin(c);
   const code = c.req.param("code");
   const erp = erpOf(c);
-  const events = await erp.list<EventRow>("FOLK Event", ["name", "is_current"]);
-  if (!events.some((e) => e.name === code)) throw new HttpError(404, "Event not found.");
+  const events = await erp.list<EventRow>("FOLK Event", ["name", "is_current", "is_list"]);
+  const target = events.find((e) => e.name === code);
+  if (!target) throw new HttpError(404, "Event not found.");
+  if (target.is_list) throw bad("A contact list cannot be the current event.");
   for (const e of events) {
     const want = e.name === code ? 1 : 0;
     if ((e.is_current ? 1 : 0) !== want) await erp.update("FOLK Event", e.name, { is_current: want });
@@ -661,7 +687,7 @@ app.get("/admin/export/people", async (c) => {
   const q = peopleQuery(c.req.query());
   const rows = await erpOf(c).list<Row>(PERSON, PERSON_FIELDS, q.filters, { ...(q.or_filters && { or_filters: q.or_filters }), order_by: q.order_by, limit_page_length: 0 });
   return csvResponse(c, "folk-people.csv", csv(
-    ["mob_no", "full_name", "gender", "level", "occupation", "profession", "pg_name", "venue", "gmap_link", "call_no", "fg_name", "fg_mob_no", "event_code", "user_tag", "attendance_count", "last_attended_on", "registered_by", "creation", "age", "current_stay", "skills", "interests", "chanting_rounds", "feedback", "comments", "not_interested"], rows));
+    ["mob_no", "full_name", "gender", "level", "occupation", "profession", "pg_name", "venue", "gmap_link", "call_no", "fg_name", "fg_mob_no", "event_code", "user_tag", "attendance_count", "last_attended_on", "registered_by", "registered_on", "age", "current_stay", "skills", "interests", "chanting_rounds", "feedback", "comments", "not_interested"], rows));
 });
 
 app.get("/reports/attendance", async (c) => {
@@ -693,6 +719,13 @@ app.put("/admin/settings", async (c) => {
   if (b.receipt && typeof b.receipt === "object") {
     const cur = (await loadSettings(c)).receipt;
     patch.receipt_format = JSON.stringify(receiptFrom({ ...cur, ...(b.receipt as Record<string, unknown>) }));
+  }
+  if (b.app_update && typeof b.app_update === "object") {
+    const u = b.app_update as Record<string, unknown>;
+    const next = updateFrom({ ...(await loadSettings(c)).app_update, ...u });
+    if (typeof u.url === "string" && u.url.trim() && !next.url) throw bad("The update link must start with https://");
+    if (next.min_build > next.latest_build) throw bad("The minimum build cannot be higher than the latest build.");
+    patch.app_update = JSON.stringify(next);
   }
   if (!Object.keys(patch).length) throw bad("Nothing to change.");
   await erpOf(c).update("FOLK Settings", "FOLK Settings", patch);
@@ -843,7 +876,7 @@ app.get("/admin/callers", async (c) => {
     by.set(r.coordinator, x);
   }
   return c.json({
-    callers: people.map((p) => ({ id: p.name, mob: p.mob_no, name: p.full_name, call_limit: p.call_limit ?? null, auto_assign: !!p.auto_assign, ...(by.get(p.name) ?? { assigned: 0, pending: 0, positive: 0 }) })),
+    callers: people.map((p) => ({ id: p.name, mob: p.mob_no, name: p.full_name, call_limit: p.call_limit || null, auto_assign: !!p.auto_assign, ...(by.get(p.name) ?? { assigned: 0, pending: 0, positive: 0 }) })),
   });
 });
 
@@ -866,12 +899,12 @@ app.patch("/admin/callers/:mob", async (c) => {
 });
 
 // ---------- admin: assigning contacts
-type AssignBody = { event: string; level: string; gender: string; attended: string; reg_event: string; mobs: string[]; coordinators: string[]; reassign_unfinished: boolean };
+type AssignBody = { event: string; level: string; gender: string; attended: string; reg_event: string; mobs: string[]; coordinators: string[] };
 function assignBody(b: Record<string, unknown>): AssignBody {
   const arr = (v: unknown) => (Array.isArray(v) ? v.map((x) => String(x)).slice(0, 5000) : []);
   return {
     event: clean(b.event, 60), level: pick(b.level, LEVELS), gender: pick(b.gender, GENDERS), attended: clean(b.attended, 5), reg_event: clean(b.reg_event, 60),
-    mobs: arr(b.mobs).map((m) => normalizeMobile(m) ?? "").filter(Boolean), coordinators: arr(b.coordinators), reassign_unfinished: b.reassign_unfinished === true,
+    mobs: arr(b.mobs).map((m) => normalizeMobile(m) ?? "").filter(Boolean), coordinators: arr(b.coordinators),
   };
 }
 
@@ -896,14 +929,19 @@ async function planAssign(c: Ctx, a: AssignBody, commit: boolean) {
   const chosen = a.coordinators.length ? coords.filter((p) => a.coordinators.includes(p.mob_no)) : coords.filter((p) => p.auto_assign);
   if (!chosen.length) throw bad("No coordinators are available. Turn on Auto assign for at least one coordinator.");
 
-  // Contacts still waiting for a first call may be taken back from their coordinator and redistributed.
-  const takeBack = new Set(a.reassign_unfinished ? existing.filter((e) => (e.status || PENDING) === PENDING).map((e) => e.person) : []);
+  // A new assignment REPLACES what the chosen coordinators had for this event (any status). Their call history (Call Log) is kept.
+  const chosenIds = new Set(chosen.map((p) => p.name));
+  const mine = existing.filter((e) => chosenIds.has(e.coordinator));
+  const takeBack = new Set(mine.map((e) => e.person));
   const todo = pool.filter((p) => !have.has(p.name) || takeBack.has(p.name));
   const load = new Map<string, number>();
   for (const e of existing) if (!takeBack.has(e.person)) load.set(e.coordinator, (load.get(e.coordinator) ?? 0) + 1);
-  const cs: Coord[] = chosen.map((p) => ({ id: p.name, name: p.full_name, load: load.get(p.name) ?? 0, cap: p.call_limit ?? Infinity }));
+  const cs: Coord[] = chosen.map((p) => ({ id: p.name, name: p.full_name, load: load.get(p.name) ?? 0, cap: p.call_limit || Infinity }));
   const { given, left, added } = distribute(todo, cs);
+  const givenPeople = new Set(given.map((g) => g.item.name));
+  const dropped = mine.filter((e) => !givenPeople.has(e.person)); // earlier assignments that do not carry over: removed
   const summary = {
+    removed_previous: dropped.length,
     pool: pool.length, already_assigned: pool.length - todo.length, assignable: given.length, unassigned: left.length,
     per_coordinator: cs.map((x) => ({ id: x.id, name: x.name, add: added.get(x.id) ?? 0, total_after: x.load + (added.get(x.id) ?? 0) })),
   };
@@ -919,6 +957,9 @@ async function planAssign(c: Ctx, a: AssignBody, commit: boolean) {
       // A concurrent assign may have created some of these already: fall back to one by one and skip duplicates.
       for (const d of docs) { try { await erp.insert(ASG, d); } catch (e2) { if (!isDuplicate(e2)) throw e2; } }
     }
+  }
+  for (const part of chunk(dropped.map((e) => e.name), 100)) {
+    await erp.call("POST", "/api/method/frappe.desk.reportview.delete_items", { items: JSON.stringify(part), doctype: ASG });
   }
   for (const part of chunk(moved, 10)) {
     await Promise.all(part.map((g) => erp.update(ASG, have.get(g.item.name)!.name, { coordinator: g.coordinator, status: PENDING, note: "", is_follow_up: 0, assigned_at: now })));
@@ -962,7 +1003,7 @@ app.post("/admin/assign/followup", async (c) => {
   const chosen = wanted.length ? coords.filter((p) => wanted.includes(p.mob_no)) : coords.filter((p) => p.auto_assign);
   if (!event || !chosen.length) throw bad("Choose an event and at least one coordinator.");
   const load = new Map(all.map((x) => [x.coordinator, x.n]));
-  const cs: Coord[] = chosen.map((p) => ({ id: p.name, name: p.full_name, load: load.get(p.name) ?? 0, cap: p.call_limit ?? Infinity }));
+  const cs: Coord[] = chosen.map((p) => ({ id: p.name, name: p.full_name, load: load.get(p.name) ?? 0, cap: p.call_limit || Infinity }));
   const { given, left, added } = distribute(rows, cs);
   const now = istNow();
   for (const part of chunk(given, 10)) {
@@ -1040,22 +1081,28 @@ app.post("/registrations", async (c) => {
   }
 });
 
+const KINDS: Record<string, [string, string, unknown]> = {
+  Volunteers: ["volunteer", "=", 1], Dinner: ["dinner", "=", 1], Donors: ["donation", "=", "Opted to Donate"], Transport: ["transport_required", "=", 1],
+};
 const regQuery = (q: Record<string, string>) => {
   const f: Filters = [];
   const event = clean(q.event, 60);
   if (event) f.push(["event_code", "=", event]);
+  // Optional "kind" narrows the list to one group of registrations (used by the chips on the Registrations screen).
+  const kind = KINDS[q.kind ?? ""];
   const text = clean(q.q, 60).replace(/[%_]/g, "");
-  return { f, event, or: text ? { or_filters: [["person_name", "like", `%${text}%`], ["person_mob", "like", `%${text.replace(/\D/g, "") || text}%`]] } : {} };
+  return { f, rowFilters: kind ? [...f, kind] : f, event, or: text ? { or_filters: [["person_name", "like", `%${text}%`], ["person_mob", "like", `%${text.replace(/\D/g, "") || text}%`]] } : {} };
 };
 
 app.get("/admin/registrations", async (c) => {
   needAdmin(c);
   const q = c.req.query();
-  const { f, or } = regQuery(q);
+  const { f, rowFilters, or } = regQuery(q);
   const page = Math.max(0, parseInt(q.page ?? "0", 10) || 0);
   const erp = erpOf(c);
+  // The totals strip always describes the whole event (and search); the chip only narrows the rows below it.
   const [rows, total, volunteers, dinner, donors, transport] = await Promise.all([
-    erp.list<Record<string, unknown>>(REG, REG_COLS, f, { ...or, order_by: "registered_at desc", limit_page_length: 50, limit_start: page * 50 }),
+    erp.list<Record<string, unknown>>(REG, REG_COLS, rowFilters, { ...or, order_by: "registered_at desc", limit_page_length: 50, limit_start: page * 50 }),
     erp.count(REG, f, or),
     erp.count(REG, [...f, ["volunteer", "=", 1]]),
     erp.count(REG, [...f, ["dinner", "=", 1]]),
@@ -1067,10 +1114,210 @@ app.get("/admin/registrations", async (c) => {
 
 app.get("/admin/export/registrations", async (c) => {
   needAdmin(c);
-  const { f, or } = regQuery(c.req.query());
+  const { rowFilters, or } = regQuery(c.req.query());
   const cols = REG_COLS.filter((x) => x !== "name");
-  const rows = await erpOf(c).list<Record<string, unknown>>(REG, cols, f, { ...or, order_by: "registered_at desc", limit_page_length: 0 });
+  const rows = await erpOf(c).list<Record<string, unknown>>(REG, cols, rowFilters, { ...or, order_by: "registered_at desc", limit_page_length: 0 });
   return csvResponse(c, "folk-registrations.csv", csv(cols, rows));
+});
+
+
+// ---------- public registration links (no sign-in): the page, the number lookup and the submit
+type LinkRow = {
+  name: string; title: string; link_type: "Registration" | "Volunteer"; event_code: string; assigned_to?: string; assigned_name?: string; is_open?: number; intro?: string;
+  ask_dinner?: number; ask_transport?: number; ask_donation?: number; slot_options?: string; service_options?: string;
+};
+const LINK_FIELDS = ["name", "title", "link_type", "event_code", "assigned_to", "assigned_name", "is_open", "intro", "ask_dinner", "ask_transport", "ask_donation", "slot_options", "service_options"];
+const lines = (s?: string) => (s ?? "").split("\n").map((x) => x.trim()).filter(Boolean);
+const loadLink = (c: Ctx, slug: string) => cached(`link:${slug}`, 15_000, () => erpOf(c).get<LinkRow>(LINK, slug));
+const GENDER_LABELS = [{ value: "M", label: "Male" }, { value: "F", label: "Female" }];
+
+async function publicLimit(c: Ctx) {
+  const ip = c.req.header("CF-Connecting-IP") ?? "unknown";
+  const r = await c.env.PUBLIC_LIMITER?.limit({ key: `pub:${ip}` });
+  if (r && !r.success) throw new HttpError(429, "Too many attempts. Please wait a minute and try again.");
+}
+
+app.get("/f/:slug", async (c) => {
+  const nonce = crypto.randomUUID().replace(/-/g, "");
+  const link = await loadLink(c, clean(c.req.param("slug"), 40));
+  if (!link) return c.html(notFoundPage(nonce), 404, pageHeaders(nonce));
+  const events = await loadEvents(c);
+  const cfg: PageConfig = {
+    slug: link.name, title: link.title, type: link.link_type, eventName: events.find((e) => e.code === link.event_code)?.name ?? link.event_code,
+    open: !!link.is_open, intro: link.intro ?? "", asks: { dinner: !!link.ask_dinner, transport: !!link.ask_transport, donation: !!link.ask_donation },
+    slots: lines(link.slot_options), services: lines(link.service_options), genders: GENDER_LABELS, occupations: [...OCCUPATIONS],
+  };
+  return c.html(renderPage(cfg, nonce), 200, pageHeaders(nonce));
+});
+
+/** Only what the form shows is returned (never phone numbers, guide details, comments or call data). */
+app.post("/pub/:slug/lookup", async (c) => {
+  await publicLimit(c);
+  const link = await loadLink(c, clean(c.req.param("slug"), 40));
+  if (!link) throw new HttpError(404, "This link is not available.");
+  if (!link.is_open) throw new HttpError(403, "This form is closed.");
+  const mob = normalizeMobile((await body(c)).mob);
+  if (!mob) throw bad("Please enter a valid 10-digit mobile number.");
+  const erp = erpOf(c);
+  const [p] = await erp.list<{ name: string; full_name: string; gender?: string; occupation?: string; profession?: string; venue?: string }>(
+    PERSON, ["name", "full_name", "gender", "occupation", "profession", "venue"], [["mob_no", "=", mob]], { limit_page_length: 1 });
+  if (!p) return c.json({ found: false });
+  const reg = await erp.get(REG, `${link.event_code}-${p.name}`);
+  return c.json({ found: true, registered: !!reg, person: { name: p.full_name, gender: p.gender ?? "", occupation: p.occupation ?? "", profession: p.profession ?? "", venue: p.venue ?? "" } });
+});
+
+app.post("/pub/:slug/submit", async (c) => {
+  await publicLimit(c);
+  const slug = clean(c.req.param("slug"), 40);
+  const link = await loadLink(c, slug);
+  if (!link) throw new HttpError(404, "This link is not available.");
+  if (!link.is_open) throw new HttpError(403, "This form is closed.");
+  const b = await body(c);
+  // Bots fill the hidden field or finish in under two seconds: pretend it worked, save nothing.
+  if (clean(b.website) || (typeof b.waited === "number" && b.waited < 2000)) return c.json({ ok: true, name: "" });
+  const mob = normalizeMobile(b.mob);
+  if (!mob) throw bad("Please enter a valid 10-digit mobile number.");
+  const erp = erpOf(c);
+
+  // Questions for this link
+  const reg: Record<string, unknown> = {};
+  if (link.link_type === "Volunteer") {
+    reg.volunteer = 1;
+    const slots = lines(link.slot_options), services = lines(link.service_options);
+    const slot = clean(b.slot, 60), service = clean(b.service, 60);
+    if (slots.length && !slots.includes(slot)) throw bad("Please choose a time slot.");
+    if (service && services.length && !services.includes(service)) throw bad("Please choose a service from the list.");
+    if (slots.length) reg.volunteer_slot = slot;
+    if (service) reg.service = service;
+  } else {
+    if (link.ask_dinner) reg.dinner = b.dinner === true ? 1 : 0;
+    if (link.ask_transport) reg.transport_required = b.transport === true ? 1 : 0;
+    if (link.ask_donation) reg.donation = b.donation === true ? "Opted to Donate" : "Pending";
+  }
+
+  // The person: existing details are never changed from this page.
+  let [person] = await erp.list<Row>(PERSON, AUTH_FIELDS, [["mob_no", "=", mob]], { limit_page_length: 1 });
+  let created = false;
+  if (!person) {
+    const name = clean(b.name, 100);
+    const gender = pick(b.gender, GENDERS);
+    if (!name) throw bad("Please enter your name.");
+    if (!gender) throw bad("Please choose your gender.");
+    const doc = {
+      mob_no: mob, full_name: name, gender, occupation: pick(b.occupation, OCCUPATIONS), profession: clean(b.profession), venue: clean(b.venue, 200),
+      event_code: link.event_code, user_tag: "Public", is_active: 1, registered_on: istToday(), registered_by: `Link: ${link.title}`.slice(0, 140),
+    };
+    try {
+      person = (await erp.insert<Row>(PERSON, nonEmpty(doc))).data;
+      created = true;
+      const made = person;
+      c.executionCtx.waitUntil(notifyNewContact(c, made).catch((e) => console.error("whatsapp", e)));
+    } catch (e) {
+      if (!isDuplicate(e)) throw e;
+      [person] = await erp.list<Row>(PERSON, AUTH_FIELDS, [["mob_no", "=", mob]], { limit_page_length: 1 });
+    }
+  }
+  if (!person) throw new HttpError(500, "Could not save. Please try again.");
+
+  const id = `${link.event_code}-${person.name}`;
+  let already = false;
+  try {
+    await erp.insert(REG, { event_code: link.event_code, person: person.name, registered_at: istNow(), via_link: slug, ...(link.assigned_to && { referred_by: link.assigned_to }), ...reg });
+  } catch (e) {
+    if (!isDuplicate(e)) throw e;
+    already = true;
+    if (Object.keys(reg).length) await erp.update(REG, id, reg);
+  }
+  c.set("actor", { id: person.name, mob, name: person.full_name, tag: "Public link" });
+  c.set("log", { target: `${person.full_name} (${mob})`, details: `${link.title}${created ? " · new contact" : ""}${already ? " · updated" : ""}` });
+  return c.json({ ok: true, name: person.full_name, created, already });
+});
+
+// ---------- registration links: admin manages them, staff see the ones assigned to them
+const SLUG_CHARS = "abcdefghjkmnpqrstuvwxyz23456789";
+const newSlug = () => Array.from(crypto.getRandomValues(new Uint8Array(8)), (n) => SLUG_CHARS[n % SLUG_CHARS.length]).join("");
+
+async function linksOut(c: Ctx, rows: LinkRow[]) {
+  const [events, counts] = await Promise.all([
+    loadEvents(c),
+    erpOf(c).list<{ via_link: string; n: number }>(REG, aggregate({ COUNT: "*", as: "n" }, "via_link"), [["via_link", "!=", ""]], { group_by: "via_link", limit_page_length: 0 }),
+  ]);
+  const origin = new URL(c.req.url).origin;
+  const n = new Map(counts.map((x) => [x.via_link, x.n]));
+  return rows.map((l) => ({
+    slug: l.name, title: l.title, type: l.link_type, event_code: l.event_code, event_name: events.find((e) => e.code === l.event_code)?.name ?? l.event_code,
+    assigned_to: l.assigned_to ?? "", assigned_name: l.assigned_name ?? "", is_open: !!l.is_open, intro: l.intro ?? "",
+    ask_dinner: !!l.ask_dinner, ask_transport: !!l.ask_transport, ask_donation: !!l.ask_donation,
+    slots: lines(l.slot_options), services: lines(l.service_options), url: `${origin}/f/${l.name}`, count: n.get(l.name) ?? 0,
+  }));
+}
+
+/** Validates the fields an admin may set. Only keys that were sent are returned, so a partial edit changes nothing else. */
+async function linkPatch(c: Ctx, b: Body): Promise<Record<string, unknown>> {
+  const p: Record<string, unknown> = {};
+  if ("title" in b) { const t = clean(b.title, 80); if (!t) throw bad("Enter a title."); p.title = t; }
+  if ("intro" in b) p.intro = clean(b.intro, 400);
+  if (typeof b.is_open === "boolean") p.is_open = b.is_open ? 1 : 0;
+  for (const k of ["ask_dinner", "ask_transport", "ask_donation"] as const) if (typeof b[k] === "boolean") p[k] = b[k] ? 1 : 0;
+  const list = (v: unknown) => (Array.isArray(v) ? [...new Set(v.map((x) => clean(x, 60)).filter(Boolean))].slice(0, 20).join("\n") : undefined);
+  if ("slots" in b) p.slot_options = list(b.slots) ?? "";
+  if ("services" in b) p.service_options = list(b.services) ?? "";
+  if ("assigned_mob" in b) {
+    const raw = String(b.assigned_mob ?? "").trim();
+    if (!raw) p.assigned_to = null;
+    else {
+      const mob = normalizeMobile(raw);
+      if (!mob) throw bad("Enter a valid 10-digit mobile number for the person this link is assigned to.");
+      const row = await getRow(erpOf(c), mob);
+      if (!row) throw new HttpError(404, "That mobile number is not in the list of people.");
+      p.assigned_to = row.name;
+    }
+  }
+  return p;
+}
+
+app.get("/admin/links", async (c) => {
+  needAdmin(c);
+  const rows = await erpOf(c).list<LinkRow>(LINK, LINK_FIELDS, [], { order_by: "creation desc", limit_page_length: 200 });
+  return c.json({ links: await linksOut(c, rows) });
+});
+
+app.post("/admin/links", async (c) => {
+  needAdmin(c);
+  const b = await body(c);
+  const type = pick(b.type, ["Registration", "Volunteer"] as const);
+  const event = clean(b.event, 60);
+  if (!type) throw bad("Choose the type of link.");
+  if (!(await loadEvents(c)).some((e) => e.code === event && !e.is_list)) throw bad("Choose an event.");
+  if (!clean(b.title, 80)) throw bad("Enter a title.");
+  const patch = await linkPatch(c, b);
+  const erp = erpOf(c);
+  for (let i = 0; i < 5; i++) {
+    const slug = newSlug();
+    try {
+      const r = await erp.insert<LinkRow>(LINK, { slug, link_type: type, event_code: event, is_open: 1, ...patch });
+      return c.json({ link: (await linksOut(c, [r.data]))[0] }, 201);
+    } catch (e) { if (!isDuplicate(e)) throw e; }
+  }
+  throw new HttpError(500, "Could not create the link. Please try again.");
+});
+
+app.patch("/admin/links/:slug", async (c) => {
+  needAdmin(c);
+  const slug = clean(c.req.param("slug"), 40);
+  const erp = erpOf(c);
+  if (!(await erp.get<LinkRow>(LINK, slug))) throw new HttpError(404, "Link not found.");
+  const patch = await linkPatch(c, await body(c));
+  if (Object.keys(patch).length) await erp.update(LINK, slug, patch);
+  memo.delete(`link:${slug}`);
+  return c.json({ link: (await linksOut(c, [(await erp.get<LinkRow>(LINK, slug))!]))[0] });
+});
+
+/** Links assigned to the signed-in coordinator or admin, ready to share. */
+app.get("/my/links", async (c) => {
+  needStaff(c);
+  const rows = await erpOf(c).list<LinkRow>(LINK, LINK_FIELDS, [["assigned_to", "=", c.get("session").id]], { order_by: "creation desc", limit_page_length: 50 });
+  return c.json({ links: await linksOut(c, rows) });
 });
 
 // ---------- admin: activity log
@@ -1260,7 +1507,7 @@ app.post("/admin/import/commit", async (c) => {
   const docs = fresh.map((r) => ({
     doctype: PERSON, mob_no: r.mob, full_name: r.name, gender: r.gender, level: r.level, occupation: r.occupation, profession: r.profession, pg_name: r.pg_name,
     venue: r.venue, gmap_link: r.gmap_link, call_no: r.call_no, fg_name: r.fg_name, fg_mob_no: r.fg_mob, ...(r.event_code && { event_code: r.event_code }),
-    user_tag: "Public", is_active: 1, registered_by: `Import (${s.name})`,
+    user_tag: "Public", is_active: 1, registered_by: `Import (${s.name})`, registered_on: istToday(),
   }));
   if (docs.length) {
     try { await erp.call("POST", "/api/method/frappe.client.insert_many", { docs }); result.added += docs.length; }
