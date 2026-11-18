@@ -20,7 +20,6 @@ class PersonFormController extends ChangeNotifier {
   final chanting = TextEditingController();
   final comments = TextEditingController();
   String gender = '', level = '', occupation = '', stay = '', feedback = '';
-  bool notInterested = false;
 
   void load(Person? p) {
     name.text = p?.name ?? '';
@@ -41,16 +40,14 @@ class PersonFormController extends ChangeNotifier {
     comments.text = p?.comments ?? '';
     stay = p?.currentStay ?? '';
     feedback = p?.feedback ?? '';
-    notInterested = p?.notInterested ?? false;
     notifyListeners();
   }
 
   void clear() => load(null);
 
-  void set({String? gender, String? level, String? occupation, String? stay, String? feedback, bool? notInterested}) {
+  void set({String? gender, String? level, String? occupation, String? stay, String? feedback}) {
     this.stay = stay ?? this.stay;
     this.feedback = feedback ?? this.feedback;
-    this.notInterested = notInterested ?? this.notInterested;
     this.gender = gender ?? this.gender;
     this.level = level ?? this.level;
     this.occupation = occupation ?? this.occupation;
@@ -76,7 +73,6 @@ class PersonFormController extends ChangeNotifier {
     'skills': skills.text.trim(),
     'interests': interests.text.trim(),
     'comments': comments.text.trim(),
-    'not_interested': notInterested,
   };
 
   @override
@@ -225,13 +221,6 @@ class PersonFields extends StatelessWidget {
           maxLines: 2,
           textCapitalization: TextCapitalization.sentences,
           decoration: const InputDecoration(labelText: 'Comments', prefixIcon: Icon(Icons.notes_outlined)),
-        ),
-        SwitchListTile(
-          contentPadding: EdgeInsets.zero,
-          value: form.notInterested,
-          onChanged: (v) => form.set(notInterested: v),
-          title: const Text('Not interested'),
-          subtitle: const Text('Left out of future call lists'),
         ),
       ],
     ),
