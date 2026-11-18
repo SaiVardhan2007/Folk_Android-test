@@ -20,6 +20,7 @@ import android.hardware.usb.UsbEndpoint
 import android.hardware.usb.UsbInterface
 import android.hardware.usb.UsbManager
 import android.os.Build
+import android.util.Log
 import io.flutter.plugin.common.BinaryMessenger
 import io.flutter.plugin.common.MethodCall
 import io.flutter.plugin.common.MethodChannel
@@ -86,15 +87,50 @@ class PrinterBridge(private val activity: Activity, messenger: BinaryMessenger) 
                     try {
                         closeAll()
                         val adapter = BluetoothAdapter.getDefaultAdapter()
-                        adapter.cancelDiscovery()
+                        stopDiscovery(adapter)
                         val dev = adapter.getRemoteDevice(address)
-                        val s = dev.createRfcommSocketToServiceRecord(sppUuid)
-                        s.connect()
-                        btSocket = s
+                        // Some printers ignore the normal (SDP-looked-up) connection and hang, so try other ways in turn.
+                        val attempts: List<Pair<String, () -> BluetoothSocket>> = listOf(
+                            "secure SPP" to { dev.createRfcommSocketToServiceRecord(sppUuid) },
+                            "insecure SPP" to { dev.createInsecureRfcommSocketToServiceRecord(sppUuid) },
+                            "channel 1" to {
+                                @Suppress("UNCHECKED_CAST")
+                                dev.javaClass.getMethod("createRfcommSocket", Int::class.javaPrimitiveType)
+                                    .invoke(dev, 1) as BluetoothSocket
+                            },
+                        )
+                        var lastError = "unknown error"
+                        var connected: BluetoothSocket? = null
+                        for ((label, make) in attempts) {
+                            var s: BluetoothSocket? = null
+                            // connect() can hang for minutes on an unresponsive printer: cut it off after 12 s.
+                            val watchdog = Runnable { try { s?.close() } catch (_: Exception) {} }
+                            try {
+                                stopDiscovery(adapter)
+                                s = make()
+                                ui.postDelayed(watchdog, 12_000)
+                                s.connect()
+                                connected = s
+                                Log.i(TAG, "Connected to $address using $label")
+                                break
+                            } catch (e: Exception) {
+                                lastError = "${e.message ?: e.javaClass.simpleName} ($label)"
+                                Log.e(TAG, "Connect to $address failed using $label", e)
+                                try { s?.close() } catch (_: Exception) {}
+                                Thread.sleep(600)
+                            } finally {
+                                ui.removeCallbacks(watchdog)
+                            }
+                        }
+                        if (connected == null) throw java.io.IOException(
+                            "$lastError. Switch the printer off and on, make sure no other phone is connected to it, then try again."
+                        )
+                        btSocket = connected
                         kind = "bluetooth"; name = dev.name ?: address
                         ui.post { result.success(true) }
                     } catch (e: Exception) {
                         closeAll()
+                        Log.e(TAG, "Bluetooth connect failed", e)
                         ui.post { result.error("CONNECT", "Could not connect: ${e.message}", null) }
                     }
                 }
@@ -116,6 +152,11 @@ class PrinterBridge(private val activity: Activity, messenger: BinaryMessenger) 
             "status" -> result.success(mapOf("connected" to isConnected(), "kind" to kind, "name" to name))
             else -> result.notImplemented()
         }
+    }
+
+    /** Android 12+ needs BLUETOOTH_SCAN for cancelDiscovery(). We never scan, so a refusal is harmless: ignore it. */
+    private fun stopDiscovery(adapter: BluetoothAdapter) {
+        try { adapter.cancelDiscovery() } catch (e: SecurityException) { Log.w(TAG, "cancelDiscovery skipped: ${e.message}") }
     }
 
     private fun isConnected(): Boolean = when (kind) {
@@ -217,5 +258,5 @@ class PrinterBridge(private val activity: Activity, messenger: BinaryMessenger) 
 
     fun dispose() = closeAll()
 
-    companion object { const val REQ_BT = 7731 }
+    companion object { const val REQ_BT = 7731; const val TAG = "PrinterBridge" }
 }
