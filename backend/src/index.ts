@@ -341,7 +341,24 @@ const needStaff = (c: Ctx) => { if (!isStaff(c.get("session"))) throw new HttpEr
 for (const p of ["/me", "/bootstrap", "/events", "/home", "/people", "/people/*", "/attendance", "/attendance/*", "/my/*", "/registrations", "/admin/*", "/reports/*"]) app.use(p, requireSession);
 
 // ---------- app update notice (public: a phone must learn it is out of date even before sign-in)
-app.get("/app/update", async (c) => c.json({ update: (await loadSettings(c)).app_update }));
+/** Phones are given OUR address for the APK (not the host's own link), so the Update button never opens another app such as GitHub's, which asks to sign in. */
+app.get("/app/update", async (c) => {
+  const u = (await loadSettings(c)).app_update;
+  return c.json({ update: { ...u, url: u.url ? `${new URL(c.req.url).origin}/app/download` : "" } });
+});
+
+/** Streams the current APK (the link an admin saved under App update) through this Worker. Public: updating must work before sign-in. */
+app.get("/app/download", async (c) => {
+  await publicLimit(c);
+  const u = (await loadSettings(c)).app_update;
+  if (!u.url) throw new HttpError(404, "There is no update to download.");
+  const res = await fetch(u.url, { redirect: "follow", headers: { "User-Agent": "folk-api/1.0" } });
+  if (!res.ok || !res.body) throw new HttpError(502, "The update file is not available right now. Please try again later.");
+  const h = new Headers({ "Content-Type": "application/vnd.android.package-archive", "Content-Disposition": 'attachment; filename="FOLK-Tracker.apk"', "Cache-Control": "no-store" });
+  const len = res.headers.get("Content-Length");
+  if (len) h.set("Content-Length", len);
+  return new Response(res.body, { status: 200, headers: h });
+});
 
 // ---------- app start-up
 type EventRow = { name: string; event_name: string; is_current?: number; is_list?: number };
@@ -821,6 +838,22 @@ app.get("/my/calls", async (c) => {
     };
   });
   return c.json({ items, message_text: activeMessage(templates), statuses: STATUSES, positive: POSITIVE, follow_up: FOLLOW_UP, note_required: NOTE_REQUIRED });
+});
+
+/** Home-page numbers for a coordinator: who they have called for an event, and which of those came to it. */
+app.get("/my/calls/summary", async (c) => {
+  staffOnly(c);
+  const s = c.get("session");
+  const event = clean(c.req.query("event"), 60);
+  if (!event) throw bad("event is required");
+  const erp = erpOf(c);
+  const rows = await erp.list<Asg>(ASG, ASG_FIELDS, [["coordinator", "=", s.id], ["event_code", "=", event], ["status", "!=", PENDING]], { order_by: "submitted_at desc", limit_page_length: 0 });
+  const ids = [...new Set(rows.map((r) => r.person))];
+  const att = (await Promise.all(chunk(ids, 100).map((ch) => erp.list<{ person: string; ts: string }>(ATT, ["person", "ts"], [["event_code", "=", event], ["person", "in", ch]], { order_by: "ts asc" })))).flat();
+  const came = new Map<string, string>();
+  for (const a of att) if (!came.has(a.person)) came.set(a.person, a.ts);
+  const calls = rows.map((r) => ({ id: r.name, name: r.person_name, mob: r.person_mob, status: r.status, called_at: r.submitted_at ?? "", came: came.has(r.person), came_at: came.get(r.person) ?? "" }));
+  return c.json({ called: calls.length, came: calls.filter((x) => x.came).length, calls });
 });
 
 /** One call outcome. Safe to retry: client_ref is unique, so the log can never get a second row for the same tap. */
