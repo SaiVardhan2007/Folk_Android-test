@@ -818,11 +818,12 @@ async function notifyCoordinators(c: Ctx, personId: string, event: string, ts: s
     erp.list<{ coordinator: string }>(ASG, ["coordinator"], [["person", "=", personId], ["event_code", "=", event]], { limit_page_length: 5 }),
   ]);
   if (!person) return;
+  const eventName = (await loadEvents(c)).find((e) => e.code === event)?.name ?? event;
   const time = new Date(ts.replace(" ", "T") + "Z").toLocaleTimeString("en-IN", { timeZone: "UTC", hour: "numeric", minute: "2-digit", hour12: true });
   for (const id of [...new Set(asg.map((a) => a.coordinator))]) {
     const co = await erp.get<Row>(PERSON, id);
     if (!co?.mob_no) continue;
-    try { await sendTemplate(c.env, attendanceAlert(co.mob_no, co.full_name, person.full_name, person.mob_no, time, s.attendance_template)); } catch (e) { console.error("whatsapp alert failed", e); }
+    try { await sendTemplate(c.env, attendanceAlert(co, person, eventName, time, s.welcome_template, defaultsOf(c.env))); } catch (e) { console.error("whatsapp alert failed", e); }
   }
 }
 
@@ -979,6 +980,19 @@ function assignBody(b: Record<string, unknown>): AssignBody {
 }
 
 /** Works out who would get which contact. With `commit` it also writes the assignments. */
+/**
+ * Updates many records with one ERPNext call per 200 rows. Updating them one by one would hit Cloudflare's
+ * limit on outgoing requests per invocation (50) as soon as an assignment moves more than a few dozen contacts.
+ */
+async function bulkUpdate(erp: Erp, doctype: string, rows: ({ name: string } & Record<string, unknown>)[]) {
+  for (const part of chunk(rows, 200)) {
+    const docs = part.map(({ name, ...fields }) => ({ doctype, docname: name, ...fields }));
+    const r = await erp.call("POST", "/api/method/frappe.client.bulk_update", { docs: JSON.stringify(docs) }); // Frappe expects the list as text
+    const failed = (r?.message?.failed_docs as unknown[] | undefined)?.length ?? 0;
+    if (failed) throw new HttpError(502, `Could not update ${failed} of ${docs.length} records. Please try again.`);
+  }
+}
+
 async function planAssign(c: Ctx, a: AssignBody, commit: boolean) {
   if (!a.event) throw bad("Choose the event these calls are for.");
   const erp = erpOf(c);
@@ -1024,16 +1038,17 @@ async function planAssign(c: Ctx, a: AssignBody, commit: boolean) {
     const docs = part.map((g) => ({ doctype: ASG, person: g.item.name, coordinator: g.coordinator, event_code: a.event, status: PENDING, is_follow_up: 0, assigned_at: now }));
     try { await erp.call("POST", "/api/method/frappe.client.insert_many", { docs }); }
     catch (e) {
-      // A concurrent assign may have created some of these already: fall back to one by one and skip duplicates.
-      for (const d of docs) { try { await erp.insert(ASG, d); } catch (e2) { if (!isDuplicate(e2)) throw e2; } }
+      // A concurrent assign may have created some of these already: drop those and insert the rest in one more call.
+      if (!isDuplicate(e)) throw e;
+      const taken = new Set((await erp.list<{ person: string }>(ASG, ["person"], [["event_code", "=", a.event], ["person", "in", docs.map((d) => d.person)]], { limit_page_length: 0 })).map((x) => x.person));
+      const rest = docs.filter((d) => !taken.has(d.person));
+      if (rest.length) await erp.call("POST", "/api/method/frappe.client.insert_many", { docs: rest });
     }
   }
   for (const part of chunk(dropped.map((e) => e.name), 100)) {
     await erp.call("POST", "/api/method/frappe.desk.reportview.delete_items", { items: JSON.stringify(part), doctype: ASG });
   }
-  for (const part of chunk(moved, 10)) {
-    await Promise.all(part.map((g) => erp.update(ASG, have.get(g.item.name)!.name, { coordinator: g.coordinator, status: PENDING, note: "", is_follow_up: 0, assigned_at: now })));
-  }
+  await bulkUpdate(erp, ASG, moved.map((g) => ({ name: have.get(g.item.name)!.name, coordinator: g.coordinator, status: PENDING, note: "", is_follow_up: 0, assigned_at: now })));
   c.executionCtx.waitUntil(notifyAssigned(c, added).catch((e) => console.error("notifyAssigned", e)));
   return summary;
 }
@@ -1076,9 +1091,7 @@ app.post("/admin/assign/followup", async (c) => {
   const cs: Coord[] = chosen.map((p) => ({ id: p.name, name: p.full_name, load: load.get(p.name) ?? 0, cap: p.call_limit || Infinity }));
   const { given, left, added } = distribute(rows, cs);
   const now = istNow();
-  for (const part of chunk(given, 10)) {
-    await Promise.all(part.map((g) => erp.update(ASG, g.item.name, { coordinator: g.coordinator, status: PENDING, is_follow_up: 1, assigned_at: now })));
-  }
+  await bulkUpdate(erp, ASG, given.map((g) => ({ name: g.item.name, coordinator: g.coordinator, status: PENDING, is_follow_up: 1, assigned_at: now })));
   c.executionCtx.waitUntil(notifyAssigned(c, added).catch((e) => console.error("notifyAssigned", e)));
   return c.json({ moved: given.length, left: left.length, candidates: rows.length });
 });

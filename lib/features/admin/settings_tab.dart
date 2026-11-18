@@ -108,18 +108,10 @@ class SettingsTab extends ConsumerWidget {
         const SizedBox(height: 12),
         if (s.hasValue) ...[
           _TemplateName(
-            label: 'Welcome message template',
+            label: 'Message template (welcome and coordinator alert)',
             hint: 'Parameters: name, event, venue, map link, call number',
             setting: 'welcome_template',
             value: '${s.value!['welcome_template'] ?? ''}',
-            onSave: (k, v) => _setText(context, ref, k, v),
-          ),
-          const SizedBox(height: 12),
-          _TemplateName(
-            label: 'Coordinator attendance alert template',
-            hint: 'Parameters: coordinator name, contact name, contact phone, time',
-            setting: 'attendance_template',
-            value: '${s.value!['attendance_template'] ?? ''}',
             onSave: (k, v) => _setText(context, ref, k, v),
           ),
         ],

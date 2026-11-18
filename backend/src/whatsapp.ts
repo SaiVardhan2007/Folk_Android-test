@@ -49,7 +49,11 @@ export async function sendTemplate(env: Bindings, m: TemplateMessage): Promise<b
   return ok;
 }
 
-/** Alert to a coordinator: {{1}} coordinator name, {{2}} contact name, {{3}} contact phone, {{4}} time attendance was marked. */
-export function attendanceAlert(coordMob: string, coordName: string, name: string, mob: string, time: string, template: string): TemplateMessage {
-  return { to: wa(coordMob), template, params: [text(coordName, "Coordinator"), text(name, "Friend"), text(mob), text(time)] };
+/**
+ * Alert to a coordinator when a contact they were assigned attends. It reuses the approved welcome template
+ * (5 fields): {{1}} the coordinator's name, {{2}} "<contact> (<phone>) attended <event> at <time>", then venue, map link, FOLK guide number.
+ */
+export function attendanceAlert(co: { mob_no: string; full_name: string }, person: { full_name: string; mob_no: string }, eventName: string, time: string, template: string, d: Defaults = {}): TemplateMessage {
+  const what = `${text(person.full_name, "Friend")} (${text(person.mob_no)}) attended ${text(eventName, "the event")} at ${text(time)}`;
+  return { to: wa(co.mob_no), template, params: [text(co.full_name, "Coordinator"), what, text(d.venue), text(d.map), text(d.guideMob)] };
 }
