@@ -104,6 +104,7 @@ class _ListsTabState extends ConsumerState<ListsTab> with AutomaticKeepAliveClie
                   child: Center(child: Text('No lists yet.', style: text.bodyMedium)),
                 )
               : Column(
+                  crossAxisAlignment: CrossAxisAlignment.stretch,
                   children: [
                     for (final l in b.lists)
                       Padding(
