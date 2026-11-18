@@ -44,3 +44,6 @@ app.*.map.json
 /android/app/profile
 /android/app/release
 *.bak
+
+# Claude Code project notes (local only)
+CLAUDE.md

@@ -1,6 +1,7 @@
 import 'dart:ui' as ui;
 
 import 'package:flutter/painting.dart';
+import 'package:flutter/services.dart' show rootBundle;
 
 import '../../core/util.dart';
 import 'receipt_format.dart';
@@ -9,6 +10,22 @@ import 'receipt_format.dart';
 const int kReceiptWidth = 384;
 const double _pad = 8;
 const _ink = Color(0xFF000000);
+
+/// The FOLK logo printed at the top. The picture has empty margins, so only this part of it (x, y, width, height) is drawn.
+const _logoAsset = 'assets/images/folk_receipt_logo.webp';
+const _logoCrop = Rect.fromLTWH(6, 32, 228, 171);
+const double _logoWidth = 230;
+Future<ui.Image?>? _logo;
+
+Future<ui.Image?> _loadLogo() => _logo ??= () async {
+  try {
+    final bytes = (await rootBundle.load(_logoAsset)).buffer.asUint8List();
+    final codec = await ui.instantiateImageCodec(bytes);
+    return (await codec.getNextFrame()).image;
+  } catch (_) {
+    return null; // no logo: the text title is printed instead
+  }
+}();
 
 /// Draws the receipt as a black-and-white picture, ready for the thermal printer.
 /// Drawn directly with a canvas (no widgets on screen), so it works from any button.
@@ -47,13 +64,25 @@ Future<ui.Image> renderReceipt(ReceiptFormat f, ReceiptData d) async {
     text('$label: $value', size: 24, align: TextAlign.left);
   }
 
-  text(f.title, size: 44, bold: true);
+  final logo = await _loadLogo();
+  if (logo != null) {
+    final h = _logoWidth * _logoCrop.height / _logoCrop.width;
+    canvas.drawImageRect(
+      logo,
+      _logoCrop,
+      Rect.fromLTWH((kReceiptWidth - _logoWidth) / 2, y, _logoWidth, h),
+      Paint()..filterQuality = FilterQuality.high,
+    );
+    y += h + 8;
+  } else {
+    text(f.title, size: 44, bold: true);
+  }
+  if (f.showEvent && d.event.isNotEmpty) text(d.event.toUpperCase(), size: 28, bold: true);
   text(f.subtitle, size: 26);
   rule();
   text(d.name.isEmpty ? d.mob : d.name, size: 34, bold: true);
   y += 4;
   if (f.showPhone && d.name.isNotEmpty) row('Phone', d.mob);
-  if (f.showEvent && d.event.isNotEmpty) row('Event', d.event);
   if (f.showTime && d.ts.length >= 16) {
     row('Date', '${d.ts.substring(8, 10)}-${d.ts.substring(5, 7)}-${d.ts.substring(0, 4)}');
     row('Time', shortTime(d.ts));
