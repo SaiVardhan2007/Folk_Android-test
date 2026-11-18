@@ -44,6 +44,7 @@ class AdminRepo {
       ((await _api.post('/admin/assign/unassign', body: {'event': event, 'coordinator': coordinatorMob}))['removed'] as num).toInt();
   Future<Map<String, dynamic>> followUp(String event, List<String> coordinatorMobs) =>
       _api.post('/admin/assign/followup', body: {'event': event, 'coordinators': coordinatorMobs});
+  Future<Map<String, dynamic>> eventSummary(String code) => _api.get('/admin/events/${Uri.encodeComponent(code)}/summary');
   Future<Map<String, dynamic>> callStats(String event) => _api.get('/admin/calls/stats', query: {'event': event});
   Future<List<Map<String, dynamic>>> templates() async =>
       ((await _api.get('/admin/templates'))['templates'] as List).map((e) => Map<String, dynamic>.from(e as Map)).toList();

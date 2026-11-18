@@ -6,6 +6,7 @@ import '../../core/theme.dart';
 import '../../core/widgets.dart';
 import '../auth/auth_controller.dart';
 import 'admin_repo.dart';
+import 'event_detail_screen.dart';
 import 'feedback_screen.dart';
 import 'link_card.dart';
 import 'links_screen.dart';
@@ -127,90 +128,99 @@ class _EventsTabState extends ConsumerState<EventsTab> with AutomaticKeepAliveCl
                 Padding(
                   padding: const EdgeInsets.only(bottom: 10),
                   child: Card(
-                    child: Padding(
-                      padding: const EdgeInsets.all(16),
-                      child: Column(
-                        crossAxisAlignment: CrossAxisAlignment.start,
-                        children: [
-                          Row(
-                            children: [
-                              Expanded(child: Text(e.name, style: text.titleSmall)),
-                              if (e.isCurrent)
-                                Chip(
-                                  label: const Text('Current'),
-                                  backgroundColor: context.colors.success.withValues(alpha: 0.15),
-                                  side: BorderSide.none,
-                                  avatar: Icon(Icons.check_circle, color: context.colors.success, size: 20),
+                    clipBehavior: Clip.antiAlias,
+                    child: InkWell(
+                      onTap: () => Navigator.of(context, rootNavigator: true).push(
+                        MaterialPageRoute<void>(
+                          builder: (_) => EventDetailScreen(eventCode: e.code, eventName: e.name, isCurrent: e.isCurrent),
+                        ),
+                      ),
+                      child: Padding(
+                        padding: const EdgeInsets.all(16),
+                        child: Column(
+                          crossAxisAlignment: CrossAxisAlignment.start,
+                          children: [
+                            Row(
+                              children: [
+                                Expanded(child: Text(e.name, style: text.titleSmall)),
+                                if (e.isCurrent)
+                                  Chip(
+                                    label: const Text('Current'),
+                                    backgroundColor: context.colors.success.withValues(alpha: 0.15),
+                                    side: BorderSide.none,
+                                    avatar: Icon(Icons.check_circle, color: context.colors.success, size: 20),
+                                  ),
+                                const Icon(Icons.chevron_right),
+                              ],
+                            ),
+                            Text('Code: ${e.code}', style: text.bodyMedium),
+                            const SizedBox(height: 12),
+                            for (final type in const ['Registration', 'Feedback'])
+                              if (formOf(e.code, type) case final l?)
+                                Padding(
+                                  padding: const EdgeInsets.only(bottom: 10),
+                                  child: EventLinkTile(
+                                    link: l,
+                                    onToggleOpen: (v) => setLinkOpen(context, ref, l, v),
+                                    onEdit: () => showLinkSheet(context, ref, link: l),
+                                  ),
                                 ),
-                            ],
-                          ),
-                          Text('Code: ${e.code}', style: text.bodyMedium),
-                          const SizedBox(height: 12),
-                          for (final type in const ['Registration', 'Feedback'])
-                            if (formOf(e.code, type) case final l?)
-                              Padding(
-                                padding: const EdgeInsets.only(bottom: 10),
-                                child: EventLinkTile(
-                                  link: l,
-                                  onToggleOpen: (v) => setLinkOpen(context, ref, l, v),
-                                  onEdit: () => showLinkSheet(context, ref, link: l),
-                                ),
-                              ),
-                          Wrap(
-                            spacing: 10,
-                            runSpacing: 10,
-                            children: [
-                              if (!e.isCurrent)
+                            Wrap(
+                              spacing: 10,
+                              runSpacing: 10,
+                              children: [
+                                if (!e.isCurrent)
+                                  FilledButton.tonalIcon(
+                                    onPressed: _busy ? null : () => _run(() => repo.setCurrentEvent(e.code), '${e.name} is now the current event'),
+                                    icon: const Icon(Icons.flag_outlined),
+                                    label: const Text('Make current'),
+                                    style: FilledButton.styleFrom(minimumSize: const Size(0, 48)),
+                                  ),
                                 FilledButton.tonalIcon(
-                                  onPressed: _busy ? null : () => _run(() => repo.setCurrentEvent(e.code), '${e.name} is now the current event'),
-                                  icon: const Icon(Icons.flag_outlined),
-                                  label: const Text('Make current'),
+                                  onPressed: () => Navigator.of(context, rootNavigator: true).push(
+                                    MaterialPageRoute<void>(
+                                      builder: (_) => RegistrationsScreen(eventCode: e.code, eventName: e.name),
+                                    ),
+                                  ),
+                                  icon: const Icon(Icons.how_to_reg_outlined),
+                                  label: const Text('Registrations'),
                                   style: FilledButton.styleFrom(minimumSize: const Size(0, 48)),
                                 ),
-                              FilledButton.tonalIcon(
-                                onPressed: () => Navigator.of(context, rootNavigator: true).push(
-                                  MaterialPageRoute<void>(
-                                    builder: (_) => RegistrationsScreen(eventCode: e.code, eventName: e.name),
+                                FilledButton.tonalIcon(
+                                  onPressed: () => Navigator.of(context, rootNavigator: true).push(
+                                    MaterialPageRoute<void>(
+                                      builder: (_) => FeedbackScreen(eventCode: e.code, eventName: e.name),
+                                    ),
                                   ),
+                                  icon: const Icon(Icons.rate_review_outlined),
+                                  label: const Text('Feedback'),
+                                  style: FilledButton.styleFrom(minimumSize: const Size(0, 48)),
                                 ),
-                                icon: const Icon(Icons.how_to_reg_outlined),
-                                label: const Text('Registrations'),
-                                style: FilledButton.styleFrom(minimumSize: const Size(0, 48)),
-                              ),
-                              FilledButton.tonalIcon(
-                                onPressed: () => Navigator.of(context, rootNavigator: true).push(
-                                  MaterialPageRoute<void>(
-                                    builder: (_) => FeedbackScreen(eventCode: e.code, eventName: e.name),
+                                OutlinedButton.icon(
+                                  onPressed: () => Navigator.of(context, rootNavigator: true).push(
+                                    MaterialPageRoute<void>(
+                                      builder: (_) => LinksScreen(eventCode: e.code, eventName: e.name),
+                                    ),
                                   ),
+                                  icon: const Icon(Icons.add_link),
+                                  label: const Text('More links'),
+                                  style: OutlinedButton.styleFrom(minimumSize: const Size(0, 48)),
                                 ),
-                                icon: const Icon(Icons.rate_review_outlined),
-                                label: const Text('Feedback'),
-                                style: FilledButton.styleFrom(minimumSize: const Size(0, 48)),
-                              ),
-                              OutlinedButton.icon(
-                                onPressed: () => Navigator.of(context, rootNavigator: true).push(
-                                  MaterialPageRoute<void>(
-                                    builder: (_) => LinksScreen(eventCode: e.code, eventName: e.name),
-                                  ),
+                                OutlinedButton.icon(
+                                  onPressed: _busy
+                                      ? null
+                                      : () => _run(
+                                          () => repo.shareCsv('/reports/attendance', 'folk-attendance-${e.code}.csv', query: {'event': e.code}),
+                                          'Attendance file ready',
+                                        ),
+                                  icon: const Icon(Icons.ios_share),
+                                  label: const Text('Attendance CSV'),
+                                  style: OutlinedButton.styleFrom(minimumSize: const Size(0, 48)),
                                 ),
-                                icon: const Icon(Icons.add_link),
-                                label: const Text('More links'),
-                                style: OutlinedButton.styleFrom(minimumSize: const Size(0, 48)),
-                              ),
-                              OutlinedButton.icon(
-                                onPressed: _busy
-                                    ? null
-                                    : () => _run(
-                                        () => repo.shareCsv('/reports/attendance', 'folk-attendance-${e.code}.csv', query: {'event': e.code}),
-                                        'Attendance file ready',
-                                      ),
-                                icon: const Icon(Icons.ios_share),
-                                label: const Text('Attendance CSV'),
-                                style: OutlinedButton.styleFrom(minimumSize: const Size(0, 48)),
-                              ),
-                            ],
-                          ),
-                        ],
+                              ],
+                            ),
+                          ],
+                        ),
                       ),
                     ),
                   ),

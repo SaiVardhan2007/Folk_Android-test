@@ -9,8 +9,6 @@ class PersonFormController extends ChangeNotifier {
   final name = TextEditingController();
   final profession = TextEditingController();
   final pgName = TextEditingController();
-  final venue = TextEditingController();
-  final gmap = TextEditingController();
   final callNo = TextEditingController();
   final fgName = TextEditingController();
   final fgMob = TextEditingController();
@@ -25,8 +23,6 @@ class PersonFormController extends ChangeNotifier {
     name.text = p?.name ?? '';
     profession.text = p?.profession ?? '';
     pgName.text = p?.pgName ?? '';
-    venue.text = p?.venue ?? '';
-    gmap.text = p?.gmapLink ?? '';
     callNo.text = p?.callNo ?? '';
     fgName.text = p?.fgName ?? '';
     fgMob.text = p?.fgMob ?? '';
@@ -61,8 +57,6 @@ class PersonFormController extends ChangeNotifier {
     'occupation': occupation,
     'profession': profession.text.trim(),
     'pg_name': pgName.text.trim(),
-    'venue': venue.text.trim(),
-    'gmap_link': gmap.text.trim(),
     'call_no': callNo.text.trim(),
     'fg_name': fgName.text.trim(),
     'fg_mob': fgMob.text.trim(),
@@ -80,8 +74,6 @@ class PersonFormController extends ChangeNotifier {
     name.dispose();
     profession.dispose();
     pgName.dispose();
-    venue.dispose();
-    gmap.dispose();
     callNo.dispose();
     fgName.dispose();
     fgMob.dispose();
@@ -148,16 +140,6 @@ class PersonFields extends StatelessWidget {
           controller: form.pgName,
           textCapitalization: TextCapitalization.words,
           decoration: const InputDecoration(labelText: 'PG / Residence', prefixIcon: Icon(Icons.home_outlined)),
-        ),
-        TextFormField(
-          controller: form.venue,
-          textCapitalization: TextCapitalization.words,
-          decoration: const InputDecoration(labelText: 'Venue', prefixIcon: Icon(Icons.place_outlined)),
-        ),
-        TextFormField(
-          controller: form.gmap,
-          keyboardType: TextInputType.url,
-          decoration: const InputDecoration(labelText: 'Google Map link', prefixIcon: Icon(Icons.map_outlined)),
         ),
         TextFormField(
           controller: form.callNo,

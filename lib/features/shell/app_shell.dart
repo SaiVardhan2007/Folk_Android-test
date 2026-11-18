@@ -28,7 +28,7 @@ class AppShell extends ConsumerWidget {
   @override
   Widget build(BuildContext context, WidgetRef ref) {
     final me = ref.watch(authProvider).value;
-    final dests = [_home, _attendance, _register, if (me?.isStaff ?? false) _calls, if (me?.isAdmin ?? false) _admin];
+    final dests = [_home, _attendance, _register, if (me?.isCoordinator ?? false) _calls, if (me?.isAdmin ?? false) _admin];
     var index = dests.lastIndexWhere((d) => d.route == '/' ? location == '/' : location.startsWith(d.route));
     if (index < 0) index = 0;
     final title = dests[index].label;

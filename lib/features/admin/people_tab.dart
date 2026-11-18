@@ -440,8 +440,6 @@ class _ManageSheetState extends ConsumerState<_ManageSheet> {
         DetailSection(title: 'Contact', rows: [
           ('Mobile', p.mob),
           ('Call number', p.callNo),
-          ('Venue', p.venue),
-          ('Map link', p.gmapLink),
         ]),
         DetailSection(title: 'About', rows: [
           ('Gender', genderLabel(p.gender)),

@@ -18,7 +18,7 @@ class _CallTarget extends Notifier<String?> {
   @override
   String? build() {
     final boot = ref.watch(bootstrapProvider).value;
-    final all = boot?.eventsAndLists ?? const <FolkEvent>[];
+    final all = boot?.events ?? const <FolkEvent>[];
     final p = _picked;
     if (p != null && all.any((e) => e.code == p)) return p;
     return boot?.currentEvent;
@@ -87,10 +87,10 @@ class CallsAdminTab extends ConsumerWidget {
     return PageBody(
       onRefresh: () async => _refresh(ref),
       children: [
-        if (boot != null && (boot.eventsAndLists.isNotEmpty))
+        if (boot != null && boot.events.isNotEmpty)
           DropdownButtonFormField<String>(
             key: ValueKey(event),
-            initialValue: boot.eventsAndLists.any((e) => e.code == event) ? event : boot.eventsAndLists.first.code,
+            initialValue: boot.events.any((e) => e.code == event) ? event : boot.events.first.code,
             isExpanded: true,
             decoration: const InputDecoration(labelText: 'Calls for', prefixIcon: Icon(Icons.event_outlined)),
             items: [
@@ -98,11 +98,6 @@ class CallsAdminTab extends ConsumerWidget {
                 DropdownMenuItem(
                   value: e.code,
                   child: Text(e.name, overflow: TextOverflow.ellipsis),
-                ),
-              for (final e in boot.lists)
-                DropdownMenuItem(
-                  value: e.code,
-                  child: Text('${e.name} (list)', overflow: TextOverflow.ellipsis),
                 ),
             ],
             onChanged: (v) => v == null ? null : ref.read(_callTargetProvider.notifier).select(v),

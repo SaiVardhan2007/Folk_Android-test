@@ -41,6 +41,7 @@ class Person {
   final int attendanceCount, age, chantingRounds;
 
   bool get isAdmin => tag == 'Admin';
+  bool get isCoordinator => tag == 'Coordinator';
   bool get isStaff => tag == 'Admin' || tag == 'Coordinator';
 
   /// Signed up but not yet approved by an admin.

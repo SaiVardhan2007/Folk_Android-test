@@ -21,6 +21,21 @@ final homeStatsProvider = StreamProvider.autoDispose.family<({int registered, in
   );
 });
 
+/// A coordinator's calls for one event and which of the people they called came.
+typedef CallSummary = ({int called, int came, List<Map<String, dynamic>> calls});
+final myCallSummaryProvider = StreamProvider.autoDispose.family<CallSummary, String>((ref, event) {
+  return cachedGet(
+    ref,
+    '/my/calls/summary',
+    (r) => (
+      called: (r['called'] as num?)?.toInt() ?? 0,
+      came: (r['came'] as num?)?.toInt() ?? 0,
+      calls: ((r['calls'] as List?) ?? const []).map((e) => Map<String, dynamic>.from(e as Map)).toList(),
+    ),
+    query: {'event': event},
+  );
+});
+
 /// Registration links assigned to the signed-in staff member (empty for most people).
 final myLinksProvider = FutureProvider.autoDispose<List<Map<String, dynamic>>>((ref) => ref.read(adminRepoProvider).myLinks());
 
@@ -47,7 +62,10 @@ class _HomeScreenState extends ConsumerState<HomeScreen> with WidgetsBindingObse
   @override
   void didChangeAppLifecycleState(AppLifecycleState state) {
     final e = ref.read(selectedEventProvider);
-    if (state == AppLifecycleState.resumed && e != null) ref.invalidate(homeStatsProvider(e));
+    if (state == AppLifecycleState.resumed && e != null) {
+      ref.invalidate(homeStatsProvider(e));
+      if (ref.read(authProvider).value?.isCoordinator ?? false) ref.invalidate(myCallSummaryProvider(e));
+    }
   }
 
   @override
@@ -57,13 +75,18 @@ class _HomeScreenState extends ConsumerState<HomeScreen> with WidgetsBindingObse
     final boot = ref.watch(bootstrapProvider);
     final event = ref.watch(selectedEventProvider);
     final stats = event == null ? null : ref.watch(homeStatsProvider(event));
+    final isCoordinator = me?.isCoordinator ?? false;
+    final callSummary = (event == null || !isCoordinator) ? null : ref.watch(myCallSummaryProvider(event));
     final myLinks = (me?.isStaff ?? false) ? (ref.watch(myLinksProvider).value ?? const <Map<String, dynamic>>[]) : const <Map<String, dynamic>>[];
 
     return PageBody(
       onRefresh: () async {
         ref.invalidate(bootstrapProvider);
         ref.invalidate(myLinksProvider);
-        if (event != null) ref.invalidate(homeStatsProvider(event));
+        if (event != null) {
+          ref.invalidate(homeStatsProvider(event));
+          if (isCoordinator) ref.invalidate(myCallSummaryProvider(event));
+        }
       },
       children: [
         Container(
@@ -103,6 +126,27 @@ class _HomeScreenState extends ConsumerState<HomeScreen> with WidgetsBindingObse
                   StatTile(icon: Icons.how_to_reg_rounded, label: 'Present today', value: stats?.value?.marked, color: context.colors.success),
                 ],
               ),
+              if (isCoordinator) ...[
+                const SizedBox(height: kGapM),
+                StatGrid(
+                  children: [
+                    StatTile(
+                      icon: Icons.phone_in_talk_rounded,
+                      label: 'Calls made',
+                      value: callSummary?.value?.called,
+                      color: context.colors.brand,
+                      onTap: callSummary?.value == null ? null : () => _showCalls(context, callSummary!.value!, cameOnly: false),
+                    ),
+                    StatTile(
+                      icon: Icons.directions_walk_rounded,
+                      label: 'Came',
+                      value: callSummary?.value?.came,
+                      color: context.colors.success,
+                      onTap: callSummary?.value == null ? null : () => _showCalls(context, callSummary!.value!, cameOnly: true),
+                    ),
+                  ],
+                ),
+              ],
             ],
           ),
         ),
@@ -114,7 +158,7 @@ class _HomeScreenState extends ConsumerState<HomeScreen> with WidgetsBindingObse
           children: [
             _ActionTile(icon: Icons.how_to_reg_outlined, title: 'Attendance', subtitle: 'Search, mark present, undo', route: '/attendance'),
             _ActionTile(icon: Icons.person_add_alt_1_outlined, title: 'Register', subtitle: 'Add a new attendee', route: '/register'),
-            if (me?.isStaff ?? false)
+            if (me?.isCoordinator ?? false)
               _ActionTile(icon: Icons.phone_in_talk_outlined, title: 'My Calls', subtitle: 'Call contacts assigned to you', route: '/calls'),
             if (me?.isAdmin ?? false)
               _ActionTile(icon: Icons.admin_panel_settings_outlined, title: 'Admin', subtitle: 'People, calls, analytics, settings', route: '/admin'),
@@ -129,6 +173,67 @@ class _HomeScreenState extends ConsumerState<HomeScreen> with WidgetsBindingObse
             ),
         ],
       ],
+    );
+  }
+}
+
+void _showCalls(BuildContext context, CallSummary data, {required bool cameOnly}) => showModalBottomSheet<void>(
+  context: context,
+  isScrollControlled: true,
+  showDragHandle: true,
+  builder: (_) => _CallsSheet(data: data, cameOnly: cameOnly),
+);
+
+/// Who the coordinator called for this event, and who of them came.
+class _CallsSheet extends StatelessWidget {
+  const _CallsSheet({required this.data, required this.cameOnly});
+  final CallSummary data;
+  final bool cameOnly;
+
+  @override
+  Widget build(BuildContext context) {
+    final text = Theme.of(context).textTheme;
+    final rows = cameOnly ? data.calls.where((r) => r['came'] == true).toList() : data.calls;
+    return SafeArea(
+      child: ConstrainedBox(
+        constraints: BoxConstraints(maxHeight: MediaQuery.of(context).size.height * 0.8),
+        child: Padding(
+          padding: const EdgeInsets.fromLTRB(kPagePadding, 0, kPagePadding, 16),
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Text(cameOnly ? 'Came (${rows.length})' : 'Calls made (${rows.length})', style: text.titleLarge),
+              const SizedBox(height: 8),
+              if (rows.isEmpty)
+                Padding(
+                  padding: const EdgeInsets.all(24),
+                  child: Center(child: Text(cameOnly ? 'None of the people you called have come yet.' : 'You have not made any calls for this event yet.', style: text.bodyLarge)),
+                )
+              else
+                Flexible(
+                  child: ListView(
+                    shrinkWrap: true,
+                    children: [
+                      for (final r in rows)
+                        ListTile(
+                          contentPadding: EdgeInsets.zero,
+                          leading: Icon(r['came'] == true ? Icons.check_circle : Icons.phone_in_talk_outlined, color: r['came'] == true ? context.colors.success : null),
+                          title: Text('${r['name'] ?? ''}'.isEmpty ? '${r['mob']}' : '${r['name']}'),
+                          subtitle: Text([
+                            '${r['mob']}',
+                            if (!cameOnly) '${r['status']}${'${r['called_at']}'.isEmpty ? '' : ' • ${shortTime('${r['called_at']}')}'}',
+                            if (cameOnly && '${r['came_at']}'.isNotEmpty) 'Came ${shortTime('${r['came_at']}')}',
+                          ].join('\n')),
+                          isThreeLine: true,
+                          trailing: !cameOnly && r['came'] == true ? Text('Came', style: text.labelLarge?.copyWith(color: context.colors.success)) : null,
+                        ),
+                    ],
+                  ),
+                ),
+            ],
+          ),
+        ),
+      ),
     );
   }
 }
