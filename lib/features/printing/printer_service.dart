@@ -6,8 +6,9 @@ import 'package:shared_preferences/shared_preferences.dart';
 
 const _lastKey = 'folk_last_printer';
 
-/// Blank lines fed after the print so the text clears the tear-off / cutter bar.
-const int kReceiptFeedLines = 10;
+/// Blank paper added under the receipt (in printer dots, 8 per mm) so the last lines clear the tear-off bar.
+/// It is part of the picture itself: small portable printers ignore feed commands, but they always print a picture.
+const int kReceiptFeedDots = 80;
 
 enum PrinterKind { bluetooth, usb }
 
@@ -91,7 +92,8 @@ class PrinterService {
     final w = image.width, h = image.height;
     final bytesPerRow = (w + 7) ~/ 8;
     final rgba = bd!.buffer.asUint8List();
-    final out = Uint8List(bytesPerRow * h);
+    final total = h + kReceiptFeedDots;
+    final out = Uint8List(bytesPerRow * total); // the extra rows stay 0 = blank paper
     for (var y = 0; y < h; y++) {
       for (var x = 0; x < w; x++) {
         final i = (y * w + x) * 4;
@@ -103,15 +105,14 @@ class PrinterService {
 
     await _write(Uint8List.fromList([0x1B, 0x40])); // initialise
     const rows = 40;
-    for (var y = 0; y < h; y += rows) {
-      final n = (h - y) < rows ? (h - y) : rows;
+    for (var y = 0; y < total; y += rows) {
+      final n = (total - y) < rows ? (total - y) : rows;
       final header = [0x1D, 0x76, 0x30, 0x00, bytesPerRow & 255, bytesPerRow >> 8, n & 255, n >> 8];
       await _write(Uint8List.fromList([...header, ...out.sublist(y * bytesPerRow, (y + n) * bytesPerRow)]));
       await Future.delayed(const Duration(milliseconds: 250));
     }
-    await _write(Uint8List.fromList(List.filled(kReceiptFeedLines, 0x0A)));
-    await Future.delayed(const Duration(milliseconds: 400));
-    await _write(Uint8List.fromList([0x1D, 0x56, 0x42, 0x00])); // feed + partial cut (ignored by printers without a cutter)
+    await Future.delayed(const Duration(milliseconds: 600)); // let the printer finish moving paper before the cut
+    await _write(Uint8List.fromList([0x1D, 0x56, 0x42, 0x00])); // feed to the cut position + partial cut (ignored by printers without a cutter)
   }
 }
 

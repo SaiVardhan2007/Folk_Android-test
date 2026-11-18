@@ -7,6 +7,10 @@ export type Bindings = {
   WHATSAPP_API_KEY: string;
   WHATSAPP_URL: string;
   WHATSAPP_PHONE_NUMBER_ID: string;
+  /** Used in the welcome message when the contact has no venue / map link / FOLK guide number (call_no) of their own. */
+  WELCOME_VENUE?: string;
+  WELCOME_MAP_LINK?: string;
+  DEFAULT_GUIDE_MOB?: string;
   AUTH_LIMITER?: { limit(o: { key: string }): Promise<{ success: boolean }> };
   PUBLIC_LIMITER?: { limit(o: { key: string }): Promise<{ success: boolean }> };
 };

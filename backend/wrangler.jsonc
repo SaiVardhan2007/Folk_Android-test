@@ -9,7 +9,10 @@
     "ERPNEXT_URL": "https://erp.hkmh.in",
     "MAIN_ADMIN_MOB": "9133318576",
     "WHATSAPP_URL": "https://kycapi.finanalyz.com/api/send-template-message",
-    "WHATSAPP_PHONE_NUMBER_ID": "598435813347675"
+    "WHATSAPP_PHONE_NUMBER_ID": "598435813347675",
+    "WELCOME_VENUE": "Hare Krishna Heritage Tower",
+    "WELCOME_MAP_LINK": "https://maps.app.goo.gl/qFhNCt7eRw2ez6mT8",
+    "DEFAULT_GUIDE_MOB": "9390927165"
   },
   "keep_vars": true,
   // Brute-force protection for login/sign-up (per IP, shared across all Cloudflare locations).

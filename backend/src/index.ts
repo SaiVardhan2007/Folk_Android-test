@@ -4,7 +4,7 @@ import type { Context } from "hono";
 import { Erp, ErpError, type Filters } from "./erp";
 import { hashPassword, verifyPassword, sha256Hex, randomCode, signToken, verifyToken } from "./crypto";
 import { analytics } from "./analytics";
-import { attendanceAlert, buildMessages, sendTemplate } from "./whatsapp";
+import { attendanceAlert, defaultsOf, sendTemplate, welcomeMessage } from "./whatsapp";
 import { buildRows, guessMapping, IMPORT_FIELDS, ImportError, loadSheetCsv, MAX_IMPORT_BYTES, MAX_IMPORT_ROWS, parseCsv, type ImportField, type ImportRow, type Mapping } from "./importer";
 import { notFoundPage, pageHeaders, renderPage, type PageConfig } from "./publicPage";
 import { distribute, FOLLOW_UP, NOTE_REQUIRED, PENDING, POSITIVE, STATUSES, type Coord } from "./calls";
@@ -688,6 +688,39 @@ app.post("/admin/events/:code/current", async (c) => {
   return c.json({ ok: true });
 });
 
+/** One event at a glance: registrations, attendance (per day), feedback and calls. */
+app.get("/admin/events/:code/summary", async (c) => {
+  needAdmin(c);
+  const code = c.req.param("code");
+  const erp = erpOf(c);
+  const ev: Filters = [["event_code", "=", code]];
+  const data = await cached(`evsum:${code}`, 15_000, async () => {
+    const [registered, volunteers, dinner, donors, transport, checkins, people, days, feedback, stars, assigned, calls] = await Promise.all([
+      erp.count(REG, ev),
+      erp.count(REG, [...ev, ["volunteer", "=", 1]]),
+      erp.count(REG, [...ev, ["dinner", "=", 1]]),
+      erp.count(REG, [...ev, ["donation", "=", "Opted to Donate"]]),
+      erp.count(REG, [...ev, ["transport_required", "=", 1]]),
+      erp.count(ATT, ev),
+      erp.list<{ person: string; n: number }>(ATT, aggregate({ COUNT: "*", as: "n" }, "person"), ev, { group_by: "person", limit_page_length: 0 }),
+      erp.list<{ attendance_date: string; n: number }>(ATT, aggregate({ COUNT: "*", as: "n" }, "attendance_date"), ev, { group_by: "attendance_date", order_by: "attendance_date asc", limit_page_length: 0 }),
+      erp.count(FB, ev),
+      erp.list<{ rating: number; n: number }>(FB, aggregate("rating", { COUNT: "*", as: "n" }), ev, { group_by: "rating", limit_page_length: 10 }),
+      erp.count(ASG, ev),
+      erp.count(LOG, ev),
+    ]);
+    const answered = stars.reduce((a, x) => a + x.n, 0);
+    const average = answered ? Math.round((stars.reduce((a, x) => a + x.rating * x.n, 0) / answered) * 10) / 10 : 0;
+    return {
+      registered, volunteers, dinner, donors, transport,
+      attended: people.length, checkins,
+      days: days.map((d) => ({ date: d.attendance_date, count: d.n })),
+      feedback, average, assigned, calls,
+    };
+  });
+  return c.json(data);
+});
+
 // ---------- admin: analytics + CSV exports
 app.get("/admin/analytics", async (c) => {
   needAdmin(c);
@@ -753,15 +786,14 @@ app.put("/admin/settings", async (c) => {
   return c.json({ ok: true, settings: await loadSettings(c) });
 });
 
-// ---------- WhatsApp: welcome messages when a contact is registered (sent in the background, never blocks the app)
-async function notifyNewContact(c: Ctx, p: Row) {
+// ---------- WhatsApp: welcome message to the contact (sent in the background, never blocks the app)
+/** Welcomes a contact who was just created or registered for an event. `eventCode` defaults to the event they were created under. */
+async function notifyNewContact(c: Ctx, p: Row, eventCode = p.event_code) {
   const s = await loadSettings(c);
   if (!s.whatsapp_enabled) return;
   const events = await loadEvents(c);
-  const eventName = events.find((e) => e.code === p.event_code)?.name ?? "";
-  for (const m of buildMessages(p, eventName, s.welcome_template)) {
-    try { await sendTemplate(c.env, m); } catch (e) { console.error("whatsapp send failed", e); }
-  }
+  const m = welcomeMessage(p, events.find((e) => e.code === eventCode)?.name ?? "", s.welcome_template, defaultsOf(c.env));
+  if (m) await sendTemplate(c.env, m);
 }
 
 /** Admin: shows what would be sent for a contact, without sending anything. */
@@ -771,7 +803,9 @@ app.get("/admin/whatsapp/preview/:mob", async (c) => {
   const row = mob ? await getRow(erpOf(c), mob) : null;
   if (!row) throw new HttpError(404, "Person not found.");
   const events = await loadEvents(c);
-  return c.json({ messages: buildMessages(row, events.find((e) => e.code === row.event_code)?.name ?? "") });
+  const s = await loadSettings(c);
+  const m = welcomeMessage(row, events.find((e) => e.code === row.event_code)?.name ?? "", s.welcome_template, defaultsOf(c.env));
+  return c.json({ messages: m ? [m] : [] });
 });
 
 /** When a contact attends, tells the coordinator(s) who were assigned to call them (if the admin switched this on). */
@@ -1109,6 +1143,7 @@ app.post("/registrations", async (c) => {
   const d = nonEmpty(regDetails(b));
   try {
     await erp.insert(REG, { event_code: event, person: person.name, registered_at: istNow(), ...d });
+    c.executionCtx.waitUntil(notifyNewContact(c, person, event).catch((e) => console.error("whatsapp", e)));
     return c.json({ ok: true, created: true }, 201);
   } catch (e) {
     if (!isDuplicate(e)) throw e;
@@ -1261,8 +1296,6 @@ app.post("/pub/:slug/submit", async (c) => {
     try {
       person = (await erp.insert<Row>(PERSON, nonEmpty(doc))).data;
       created = true;
-      const made = person;
-      c.executionCtx.waitUntil(notifyNewContact(c, made).catch((e) => console.error("whatsapp", e)));
     } catch (e) {
       if (!isDuplicate(e)) throw e;
       [person] = await erp.list<Row>(PERSON, AUTH_FIELDS, [["mob_no", "=", mob]], { limit_page_length: 1 });
@@ -1279,6 +1312,8 @@ app.post("/pub/:slug/submit", async (c) => {
     already = true;
     if (Object.keys(reg).length) await erp.update(REG, id, reg);
   }
+  // Welcome on a fresh registration only (new or existing contact); re-submitting the form sends nothing.
+  if (!already) { const who = person; c.executionCtx.waitUntil(notifyNewContact(c, who, link.event_code).catch((e) => console.error("whatsapp", e))); }
   c.set("actor", { id: person.name, mob, name: person.full_name, tag: "Public link" });
   c.set("log", { target: `${person.full_name} (${mob})`, details: `${link.title}${created ? " · new contact" : ""}${already ? " · updated" : ""}` });
   return c.json({ ok: true, name: person.full_name, created, already });
