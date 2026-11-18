@@ -11,10 +11,14 @@ export type Bindings = {
 };
 
 export type Session = { id: string; mob: string; name: string; tag: string };
-export type Vars = { session: Session };
+/** Optional detail a route adds for the activity log (who did what is filled in automatically). */
+export type Vars = { session: Session; actor?: Session; log?: { target?: string; details?: string } };
 
-export const LEVELS = ["Folk Foundation", "Folk Prelims"] as const;
+export const LEVELS = ["AOMC", "Folk Foundation", "Folk Prelims", "Enhance"] as const;
 export const GENDERS = ["M", "F"] as const;
-export const OCCUPATIONS = ["Student", "Job Search", "Working"] as const;
+export const OCCUPATIONS = ["Student", "Job Search", "Working", "Business", "Others"] as const;
+export const STAYS = ["With Parents", "In Hostel"] as const;
+export const FEEDBACKS = ["Excellent", "Good"] as const;
+export const DONATIONS = ["Pending", "Opted to Donate"] as const;
 export const DEFAULT_TAGS = ["Public", "Coordinator", "Admin"];
 export const MIN_PASSWORD = 8;

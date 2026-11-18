@@ -11,6 +11,7 @@ import '../printing/printer_sheet.dart';
 import '../printing/receipt_format.dart';
 import '../printing/receipt_renderer.dart';
 import 'admin_repo.dart';
+import 'logs_screen.dart';
 
 final _settingsProvider = FutureProvider.autoDispose<Map<String, dynamic>>((ref) => ref.read(adminRepoProvider).settings());
 
@@ -40,6 +41,16 @@ class SettingsTab extends ConsumerWidget {
         Text(
           'These switches apply to everyone using the app. Other phones pick up a change the next time they open the app.',
           style: text.bodyMedium,
+        ),
+        const SizedBox(height: 12),
+        Card(
+          child: ListTile(
+            leading: const Icon(Icons.history),
+            title: const Text('Activity log'),
+            subtitle: const Text('Everything every user, coordinator and admin has done'),
+            trailing: const Icon(Icons.chevron_right),
+            onTap: () => Navigator.of(context).push(MaterialPageRoute<void>(builder: (_) => const LogsScreen())),
+          ),
         ),
         const SizedBox(height: 12),
         s.when(

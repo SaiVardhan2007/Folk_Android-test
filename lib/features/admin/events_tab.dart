@@ -6,6 +6,7 @@ import '../../core/theme.dart';
 import '../../core/widgets.dart';
 import '../auth/auth_controller.dart';
 import 'admin_repo.dart';
+import 'registrations_screen.dart';
 
 class EventsTab extends ConsumerStatefulWidget {
   const EventsTab({super.key});
@@ -134,6 +135,16 @@ class _EventsTabState extends ConsumerState<EventsTab> with AutomaticKeepAliveCl
                                   label: const Text('Make current'),
                                   style: FilledButton.styleFrom(minimumSize: const Size(0, 48)),
                                 ),
+                              FilledButton.tonalIcon(
+                                onPressed: () => Navigator.of(context).push(
+                                  MaterialPageRoute<void>(
+                                    builder: (_) => RegistrationsScreen(eventCode: e.code, eventName: e.name),
+                                  ),
+                                ),
+                                icon: const Icon(Icons.how_to_reg_outlined),
+                                label: const Text('Registrations'),
+                                style: FilledButton.styleFrom(minimumSize: const Size(0, 48)),
+                              ),
                               OutlinedButton.icon(
                                 onPressed: _busy
                                     ? null

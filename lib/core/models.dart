@@ -23,12 +23,21 @@ class Person {
     this.callNo = '',
     this.fgName = '',
     this.fgMob = '',
+    this.age = 0,
+    this.currentStay = '',
+    this.skills = '',
+    this.interests = '',
+    this.chantingRounds = 0,
+    this.feedback = '',
+    this.comments = '',
+    this.notInterested = false,
   });
 
   final String id, mob, name, gender, level, occupation, profession, pgName, eventCode, tag, lastAttendedOn, registeredBy, joined;
   final String venue, gmapLink, callNo, fgName, fgMob;
-  final bool isActive, hasPassword;
-  final int attendanceCount;
+  final String currentStay, skills, interests, feedback, comments;
+  final bool isActive, hasPassword, notInterested;
+  final int attendanceCount, age, chantingRounds;
 
   bool get isAdmin => tag == 'Admin';
   bool get isStaff => tag == 'Admin' || tag == 'Coordinator';
@@ -58,6 +67,14 @@ class Person {
     callNo: j['call_no'] as String? ?? '',
     fgName: j['fg_name'] as String? ?? '',
     fgMob: j['fg_mob'] as String? ?? '',
+    age: (j['age'] as num?)?.toInt() ?? 0,
+    currentStay: j['current_stay'] as String? ?? '',
+    skills: j['skills'] as String? ?? '',
+    interests: j['interests'] as String? ?? '',
+    chantingRounds: (j['chanting_rounds'] as num?)?.toInt() ?? 0,
+    feedback: j['feedback'] as String? ?? '',
+    comments: j['comments'] as String? ?? '',
+    notInterested: j['not_interested'] as bool? ?? false,
   );
 
   Map<String, dynamic> toJson() => {
@@ -81,6 +98,14 @@ class Person {
     'call_no': callNo,
     'fg_name': fgName,
     'fg_mob': fgMob,
+    'age': age,
+    'current_stay': currentStay,
+    'skills': skills,
+    'interests': interests,
+    'chanting_rounds': chantingRounds,
+    'feedback': feedback,
+    'comments': comments,
+    'not_interested': notInterested,
   };
 }
 
@@ -103,13 +128,15 @@ class Bootstrap {
     required this.levels,
     required this.genders,
     required this.occupations,
+    this.stays = const ['With Parents', 'In Hostel'],
+    this.feedbacks = const ['Excellent', 'Good'],
     this.offlineEnabled = false,
     this.receipt = const ReceiptFormat(),
   });
   final Person user;
   final List<FolkEvent> events;
   final String currentEvent;
-  final List<String> tags, levels, genders, occupations;
+  final List<String> tags, levels, genders, occupations, stays, feedbacks;
 
   /// Admin switch (Admin → Settings): lets check-ins be saved on the phone when there is no signal.
   final bool offlineEnabled;
@@ -127,6 +154,8 @@ class Bootstrap {
       levels: list('levels'),
       genders: list('genders'),
       occupations: list('occupations'),
+      stays: list('stays'),
+      feedbacks: list('feedbacks'),
       offlineEnabled: ((j['settings'] as Map?)?['offline_queue_enabled'] as bool?) ?? false,
       receipt: ReceiptFormat.fromJson(((j['settings'] as Map?)?['receipt'] as Map?)?.cast<String, dynamic>()),
     );

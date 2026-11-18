@@ -14,7 +14,13 @@ class PersonFormController extends ChangeNotifier {
   final callNo = TextEditingController();
   final fgName = TextEditingController();
   final fgMob = TextEditingController();
-  String gender = '', level = '', occupation = '';
+  final age = TextEditingController();
+  final skills = TextEditingController();
+  final interests = TextEditingController();
+  final chanting = TextEditingController();
+  final comments = TextEditingController();
+  String gender = '', level = '', occupation = '', stay = '', feedback = '';
+  bool notInterested = false;
 
   void load(Person? p) {
     name.text = p?.name ?? '';
@@ -28,12 +34,23 @@ class PersonFormController extends ChangeNotifier {
     gender = p?.gender ?? '';
     level = p?.level ?? '';
     occupation = p?.occupation ?? '';
+    age.text = (p?.age ?? 0) > 0 ? '${p!.age}' : '';
+    skills.text = p?.skills ?? '';
+    interests.text = p?.interests ?? '';
+    chanting.text = (p?.chantingRounds ?? 0) > 0 ? '${p!.chantingRounds}' : '';
+    comments.text = p?.comments ?? '';
+    stay = p?.currentStay ?? '';
+    feedback = p?.feedback ?? '';
+    notInterested = p?.notInterested ?? false;
     notifyListeners();
   }
 
   void clear() => load(null);
 
-  void set({String? gender, String? level, String? occupation}) {
+  void set({String? gender, String? level, String? occupation, String? stay, String? feedback, bool? notInterested}) {
+    this.stay = stay ?? this.stay;
+    this.feedback = feedback ?? this.feedback;
+    this.notInterested = notInterested ?? this.notInterested;
     this.gender = gender ?? this.gender;
     this.level = level ?? this.level;
     this.occupation = occupation ?? this.occupation;
@@ -52,6 +69,14 @@ class PersonFormController extends ChangeNotifier {
     'call_no': callNo.text.trim(),
     'fg_name': fgName.text.trim(),
     'fg_mob': fgMob.text.trim(),
+    if (int.tryParse(age.text.trim()) != null) 'age': int.parse(age.text.trim()),
+    if (int.tryParse(chanting.text.trim()) != null) 'chanting_rounds': int.parse(chanting.text.trim()),
+    'current_stay': stay,
+    'feedback': feedback,
+    'skills': skills.text.trim(),
+    'interests': interests.text.trim(),
+    'comments': comments.text.trim(),
+    'not_interested': notInterested,
   };
 
   @override
@@ -64,6 +89,11 @@ class PersonFormController extends ChangeNotifier {
     callNo.dispose();
     fgName.dispose();
     fgMob.dispose();
+    age.dispose();
+    skills.dispose();
+    interests.dispose();
+    chanting.dispose();
+    comments.dispose();
     super.dispose();
   }
 }
@@ -149,6 +179,59 @@ class PersonFields extends StatelessWidget {
           keyboardType: TextInputType.phone,
           inputFormatters: _digits,
           decoration: const InputDecoration(labelText: 'FOLK Guide mobile', prefixIcon: Icon(Icons.phone_outlined)),
+        ),
+        TextFormField(
+          controller: form.age,
+          keyboardType: TextInputType.number,
+          inputFormatters: [FilteringTextInputFormatter.digitsOnly, LengthLimitingTextInputFormatter(3)],
+          decoration: const InputDecoration(labelText: 'Age', prefixIcon: Icon(Icons.cake_outlined)),
+        ),
+        OptionDropdown(
+          label: 'Staying',
+          value: form.stay,
+          options: boot?.stays ?? const ['With Parents', 'In Hostel'],
+          icon: Icons.bed_outlined,
+          onChanged: (v) => form.set(stay: v),
+        ),
+        TextFormField(
+          controller: form.skills,
+          textCapitalization: TextCapitalization.words,
+          decoration: const InputDecoration(labelText: 'Skills', helperText: 'Separate with commas', prefixIcon: Icon(Icons.star_outline)),
+        ),
+        TextFormField(
+          controller: form.interests,
+          textCapitalization: TextCapitalization.words,
+          decoration: const InputDecoration(
+            labelText: 'Interests',
+            helperText: 'e.g. Online workshop, Bhagavad Gita',
+            prefixIcon: Icon(Icons.favorite_border),
+          ),
+        ),
+        TextFormField(
+          controller: form.chanting,
+          keyboardType: TextInputType.number,
+          inputFormatters: [FilteringTextInputFormatter.digitsOnly, LengthLimitingTextInputFormatter(3)],
+          decoration: const InputDecoration(labelText: 'Chanting rounds', prefixIcon: Icon(Icons.self_improvement_outlined)),
+        ),
+        OptionDropdown(
+          label: 'Feedback',
+          value: form.feedback,
+          options: boot?.feedbacks ?? const ['Excellent', 'Good'],
+          icon: Icons.thumb_up_alt_outlined,
+          onChanged: (v) => form.set(feedback: v),
+        ),
+        TextFormField(
+          controller: form.comments,
+          maxLines: 2,
+          textCapitalization: TextCapitalization.sentences,
+          decoration: const InputDecoration(labelText: 'Comments', prefixIcon: Icon(Icons.notes_outlined)),
+        ),
+        SwitchListTile(
+          contentPadding: EdgeInsets.zero,
+          value: form.notInterested,
+          onChanged: (v) => form.set(notInterested: v),
+          title: const Text('Not interested'),
+          subtitle: const Text('Left out of future call lists'),
         ),
       ],
     ),

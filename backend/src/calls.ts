@@ -2,7 +2,7 @@
 
 export const STATUSES = [
   "Not Done", "Joining the session", "Next Week will join", "Out of Station", "Wrong Number",
-  "Shifted to Home Town", "Need to Call Again", "Available on Weekend", "Others",
+  "Shifted to Home Town", "Need to Call Again", "Available on Weekend", "Not Answered", "Not Coming", "Not Interested", "Others",
 ] as const;
 export type CallStatus = (typeof STATUSES)[number];
 

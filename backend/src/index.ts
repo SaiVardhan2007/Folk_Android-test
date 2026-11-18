@@ -7,7 +7,7 @@ import { analytics } from "./analytics";
 import { attendanceAlert, buildMessages, sendTemplate } from "./whatsapp";
 import { buildRows, guessMapping, IMPORT_FIELDS, ImportError, loadSheetCsv, MAX_IMPORT_BYTES, MAX_IMPORT_ROWS, parseCsv, type ImportField, type ImportRow, type Mapping } from "./importer";
 import { distribute, FOLLOW_UP, NOTE_REQUIRED, PENDING, POSITIVE, STATUSES, type Coord } from "./calls";
-import { DEFAULT_TAGS, GENDERS, LEVELS, MIN_PASSWORD, OCCUPATIONS, type Bindings, type Session, type Vars } from "./types";
+import { DEFAULT_TAGS, DONATIONS, FEEDBACKS, GENDERS, LEVELS, MIN_PASSWORD, OCCUPATIONS, STAYS, type Bindings, type Session, type Vars } from "./types";
 
 type Ctx = Context<{ Bindings: Bindings; Variables: Vars }>;
 const app = new Hono<{ Bindings: Bindings; Variables: Vars }>();
@@ -17,6 +17,8 @@ const PERSON = "FOLK Users";
 const ATT = "FOLK Attendance";
 const ASG = "FOLK Assignment";
 const LOG = "FOLK Call Log";
+const REG = "FOLK Registration";
+const ACT = "FOLK Activity Log";
 const PAGE_SIZE = 25;
 
 // ---------- small helpers
@@ -54,8 +56,9 @@ type Row = {
   event_code?: string; user_tag?: string; is_active?: number; attendance_count?: number; last_attended_on?: string | null;
   registered_by?: string; password_hash?: string; reset_code_hash?: string; reset_code_expires?: string; creation?: string;
   venue?: string; gmap_link?: string; call_no?: string; fg_name?: string; fg_mob_no?: string;
+  age?: number; current_stay?: string; skills?: string; interests?: string; chanting_rounds?: number; feedback?: string; comments?: string; not_interested?: number;
 };
-const PERSON_FIELDS = ["name", "mob_no", "full_name", "gender", "level", "occupation", "profession", "pg_name", "event_code", "user_tag", "is_active", "attendance_count", "last_attended_on", "registered_by", "creation", "venue", "gmap_link", "call_no", "fg_name", "fg_mob_no"];
+const PERSON_FIELDS = ["name", "mob_no", "full_name", "gender", "level", "occupation", "profession", "pg_name", "event_code", "user_tag", "is_active", "attendance_count", "last_attended_on", "registered_by", "creation", "venue", "gmap_link", "call_no", "fg_name", "fg_mob_no", "age", "current_stay", "skills", "interests", "chanting_rounds", "feedback", "comments", "not_interested"];
 const AUTH_FIELDS = [...PERSON_FIELDS, "password_hash", "reset_code_hash", "reset_code_expires"];
 
 /** What the app is allowed to see about a person. Never includes any hash. */
@@ -65,6 +68,8 @@ const publicPerson = (r: Row) => ({
   is_active: r.is_active !== 0, attendance_count: r.attendance_count ?? 0, last_attended_on: r.last_attended_on ?? "",
   registered_by: r.registered_by ?? "", joined: (r.creation ?? "").slice(0, 10),
   venue: r.venue ?? "", gmap_link: r.gmap_link ?? "", call_no: r.call_no ?? "", fg_name: r.fg_name ?? "", fg_mob: r.fg_mob_no ?? "",
+  age: r.age ?? 0, current_stay: r.current_stay ?? "", skills: r.skills ?? "", interests: r.interests ?? "", chanting_rounds: r.chanting_rounds ?? 0,
+  feedback: r.feedback ?? "", comments: r.comments ?? "", not_interested: !!r.not_interested,
 });
 
 // ---------- tiny in-isolate caches (each Cloudflare isolate keeps its own; they only absorb bursts)
@@ -91,6 +96,56 @@ app.onError((e, c) => {
 app.notFound((c) => c.json({ error: "Not found" }, 404));
 app.get("/", (c) => c.json({ ok: true, service: "folk-api" }));
 app.get("/health", (c) => c.json({ ok: true, time: istNow() }));
+
+// ---------- activity log: one record per change anyone makes (user, coordinator or admin). Reads are not logged.
+type Body = Record<string, unknown>;
+const str = (v: unknown) => (typeof v === "string" || typeof v === "number" ? String(v).slice(0, 120) : "");
+/** [method, path pattern, what it is called in the log, optional safe detail]. Passwords, codes and keys are never recorded. */
+const ACTIVITY: [string, RegExp, string, ((b: Body) => string)?][] = [
+  ["POST", /^\/auth\/login$/, "Signed in"],
+  ["POST", /^\/auth\/signup$/, "Signed up", (b) => str(b.name)],
+  ["POST", /^\/auth\/activate$/, "Set a new password with a code"],
+  ["POST", /^\/people$/, "Registered a contact", (b) => str(b.name)],
+  ["PUT", /^\/people\/\d+$/, "Edited a contact"],
+  ["POST", /^\/attendance$/, "Marked attendance", (b) => `event ${str(b.event)}`],
+  ["DELETE", /^\/attendance\//, "Removed an attendance record"],
+  ["POST", /^\/registrations$/, "Registered a person for an event", (b) => `event ${str(b.event)}`],
+  ["POST", /^\/my\/calls\/[^/]+\/submit$/, "Logged a call", (b) => str(b.status)],
+  ["PATCH", /^\/admin\/people\/\d+\/role$/, "Changed a role", (b) => str(b.tag)],
+  ["PATCH", /^\/admin\/people\/\d+\/active$/, "Enabled or disabled an account", (b) => (b.active ? "enabled" : "disabled")],
+  ["POST", /^\/admin\/people\/\d+\/reset$/, "Reset a password"],
+  ["POST", /^\/admin\/events$/, "Added an event", (b) => str(b.name)],
+  ["POST", /^\/admin\/events\/[^/]+\/current$/, "Changed the current event"],
+  ["PUT", /^\/admin\/settings$/, "Changed settings", (b) => Object.keys(b).slice(0, 8).join(", ")],
+  ["POST", /^\/admin\/assign$/, "Assigned calls", (b) => `event ${str(b.event)}`],
+  ["POST", /^\/admin\/assign\/unassign$/, "Removed unstarted call assignments", (b) => `event ${str(b.event)}`],
+  ["POST", /^\/admin\/assign\/followup$/, "Gave follow-up calls to coordinators", (b) => `event ${str(b.event)}`],
+  ["PATCH", /^\/admin\/callers\/\d+$/, "Changed a caller's call settings"],
+  ["POST", /^\/admin\/import\/commit$/, "Imported contacts"],
+  ["PUT", /^\/admin\/import\/sources$/, "Changed import sources"],
+  ["PUT", /^\/admin\/templates$/, "Changed WhatsApp templates"],
+];
+
+async function activityLog(c: Ctx, next: () => Promise<void>) {
+  await next();
+  const m = c.req.method;
+  if (m === "GET" || m === "HEAD" || m === "OPTIONS" || c.res.status >= 400) return;
+  const rule = ACTIVITY.find(([method, re]) => method === m && re.test(c.req.path));
+  if (!rule) return;
+  try {
+    let b: Body = {};
+    if (rule[3]) { try { b = (await c.req.json()) as Body; } catch { /* no body */ } }
+    const who = c.get("actor") ?? c.get("session");
+    const extra = c.get("log");
+    const mob = /\/(\d{10})(\/|$)/.exec(c.req.path)?.[1] ?? normalizeMobile(b.mob) ?? "";
+    const doc = {
+      at: istNow(), user_id: who?.id ?? "", user_name: who?.name ?? str(b.name) ?? "", role: who?.tag ?? "Not signed in",
+      action: rule[2], target: extra?.target ?? mob, details: extra?.details ?? rule[3]?.(b) ?? "",
+    };
+    c.executionCtx.waitUntil(erpOf(c).insert(ACT, doc).catch((e) => console.error("activity log", e)));
+  } catch (e) { console.error("activity log", e); }
+}
+app.use("*", activityLog);
 
 // ---------- admin-controlled settings (FOLK Settings, a single record)
 /** What is printed on the attendance receipt. Edited in Admin → Settings, used by every phone. */
@@ -154,7 +209,18 @@ function details(b: Record<string, unknown>) {
     profession: clean(b.profession), pg_name: clean(b.pg_name),
     venue: clean(b.venue, 200), gmap_link: clean(b.gmap_link, 500), call_no: normalizeMobile(b.call_no) ?? "",
     fg_name: clean(b.fg_name), fg_mob_no: normalizeMobile(b.fg_mob) ?? "",
+    // Numbers and flags are only included when sent, so an edit that leaves them out can never reset them.
+    age: intIn(b.age, 1, 120), chanting_rounds: intIn(b.chanting_rounds, 0, 1000),
+    current_stay: pick(b.current_stay, STAYS), feedback: pick(b.feedback, FEEDBACKS),
+    skills: clean(b.skills, 200), interests: clean(b.interests, 200), comments: clean(b.comments, 500),
+    ...(typeof b.not_interested === "boolean" ? { not_interested: b.not_interested ? 1 : 0 } : {}),
   };
+}
+/** A whole number inside [min, max], or undefined (so the field is left alone). */
+function intIn(v: unknown, min: number, max: number): number | undefined {
+  if (v === null || v === "" || v === undefined) return undefined;
+  const n = Math.floor(Number(v));
+  return Number.isFinite(n) && n >= min && n <= max ? n : undefined;
 }
 
 app.post("/auth/signup", async (c) => {
@@ -207,6 +273,7 @@ app.post("/auth/login", async (c) => {
   }
   if (r.is_active === 0) throw new HttpError(403, "Your account is waiting for admin approval, or has been disabled.", { pending: true });
   if ((r.user_tag || "Public") === "Public") throw new HttpError(403, "This account cannot sign in.");
+  c.set("actor", { id: r.name, mob: r.mob_no, name: r.full_name, tag: r.user_tag || "Public" });
   return c.json(await issue(c, r));
 });
 
@@ -253,7 +320,7 @@ const isStaff = (s: Session) => s.tag === "Admin" || s.tag === "Coordinator";
 const needAdmin = (c: Ctx) => { if (!isAdmin(c.get("session"))) throw new HttpError(403, "Admin access required."); };
 const needStaff = (c: Ctx) => { if (!isStaff(c.get("session"))) throw new HttpError(403, "Not allowed."); };
 
-for (const p of ["/me", "/bootstrap", "/events", "/home", "/people", "/people/*", "/attendance", "/attendance/*", "/my/*", "/admin/*", "/reports/*"]) app.use(p, requireSession);
+for (const p of ["/me", "/bootstrap", "/events", "/home", "/people", "/people/*", "/attendance", "/attendance/*", "/my/*", "/registrations", "/admin/*", "/reports/*"]) app.use(p, requireSession);
 
 // ---------- app start-up
 type EventRow = { name: string; event_name: string; is_current?: number };
@@ -284,7 +351,7 @@ app.get("/bootstrap", async (c) => {
   const [events, tags, r, settings] = await Promise.all([loadEvents(c), tagOptions(c), getById(erpOf(c), s.id), loadSettings(c)]);
   return c.json({
     user: r ? publicPerson(r) : null, events, current_event: events.find((e) => e.is_current)?.code ?? events[0]?.code ?? "",
-    tags, levels: LEVELS, genders: GENDERS, occupations: OCCUPATIONS, today: istToday(),
+    tags, levels: LEVELS, genders: GENDERS, occupations: OCCUPATIONS, stays: STAYS, feedbacks: FEEDBACKS, today: istToday(),
     settings: { offline_queue_enabled: settings.offline_queue_enabled, receipt: settings.receipt },
   });
 });
@@ -594,7 +661,7 @@ app.get("/admin/export/people", async (c) => {
   const q = peopleQuery(c.req.query());
   const rows = await erpOf(c).list<Row>(PERSON, PERSON_FIELDS, q.filters, { ...(q.or_filters && { or_filters: q.or_filters }), order_by: q.order_by, limit_page_length: 0 });
   return csvResponse(c, "folk-people.csv", csv(
-    ["mob_no", "full_name", "gender", "level", "occupation", "profession", "pg_name", "venue", "gmap_link", "call_no", "fg_name", "fg_mob_no", "event_code", "user_tag", "attendance_count", "last_attended_on", "registered_by", "creation"], rows));
+    ["mob_no", "full_name", "gender", "level", "occupation", "profession", "pg_name", "venue", "gmap_link", "call_no", "fg_name", "fg_mob_no", "event_code", "user_tag", "attendance_count", "last_attended_on", "registered_by", "creation", "age", "current_stay", "skills", "interests", "chanting_rounds", "feedback", "comments", "not_interested"], rows));
 });
 
 app.get("/reports/attendance", async (c) => {
@@ -751,11 +818,12 @@ app.get("/people/:mob/history", async (c) => {
   const mob = normalizeMobile(c.req.param("mob"));
   if (!mob) throw bad("Enter a valid 10-digit mobile number.");
   const erp = erpOf(c);
-  const [calls, sessions] = await Promise.all([
-    erp.list<{ called_at: string; status: string; note?: string; coordinator_name?: string }>(LOG, ["called_at", "status", "note", "coordinator_name"], [["person_mob", "=", mob]], { order_by: "called_at desc", limit_page_length: 50 }),
+  const [calls, sessions, registrations] = await Promise.all([
+    erp.list<{ called_at: string; status: string; note?: string; coordinator_name?: string; legacy_caller?: string; event_code?: string }>(LOG, ["called_at", "status", "note", "coordinator_name", "legacy_caller", "event_code"], [["person_mob", "=", mob]], { order_by: "called_at desc", limit_page_length: 50 }),
     erp.list<{ ts: string; event_code: string; marked_by_name?: string }>(ATT, ["ts", "event_code", "marked_by_name"], [["person_mob", "=", mob]], { order_by: "ts desc", limit_page_length: 50 }),
+    erp.list<Record<string, unknown>>(REG, REG_COLS, [["person_mob", "=", mob]], { order_by: "registered_at desc", limit_page_length: 50 }),
   ]);
-  return c.json({ calls, sessions });
+  return c.json({ calls: calls.map((x) => ({ ...x, coordinator_name: x.coordinator_name || x.legacy_caller || "" })), sessions, registrations });
 });
 
 // ---------- admin: callers
@@ -812,7 +880,7 @@ async function planAssign(c: Ctx, a: AssignBody, commit: boolean) {
   if (!a.event) throw bad("Choose the event these calls are for.");
   const erp = erpOf(c);
   // Pool: Public contacts only (staff are never called), matching the filters.
-  const f: Filters = [["user_tag", "=", "Public"], ["is_active", "=", 1]];
+  const f: Filters = [["user_tag", "=", "Public"], ["is_active", "=", 1], ["not_interested", "=", 0]];
   if (a.level) f.push(["level", "=", a.level]);
   if (a.gender) f.push(["gender", "=", a.gender]);
   if (a.reg_event) f.push(["event_code", "=", a.reg_event]);
@@ -921,7 +989,7 @@ app.get("/admin/calls/stats", async (c) => {
   ]);
   const nm = new Map(names.map((x) => [x.name, x.full_name]));
   const who = new Map<string, { name: string; assigned: number; pending: number; calls: number; positive: number }>();
-  const row = (id: string) => who.get(id) ?? (who.set(id, { name: nm.get(id) ?? id, assigned: 0, pending: 0, calls: 0, positive: 0 }), who.get(id)!);
+  const row = (id: string) => who.get(id) ?? (who.set(id, { name: nm.get(id) ?? (id ? id : "Earlier system (imported)"), assigned: 0, pending: 0, calls: 0, positive: 0 }), who.get(id)!);
   for (const r of asg) { const x = row(r.coordinator); x.assigned += r.n; if (r.status === PENDING) x.pending += r.n; }
   const byStatus = new Map<string, number>();
   for (const r of logs) {
@@ -937,6 +1005,104 @@ app.get("/admin/calls/stats", async (c) => {
   });
 });
 
+
+
+// ---------- event registrations (one record per person per event, for every festival / programme)
+const REG_COLS = ["name", "event_code", "person", "person_name", "person_mob", "registration_no", "registered_at", "volunteer", "volunteer_slot", "service", "dinner", "donation", "transport_required", "standard"];
+const flag = (v: unknown) => (v === true || v === 1 || v === "1" ? 1 : v === false || v === 0 || v === "0" ? 0 : undefined);
+function regDetails(b: Body) {
+  return {
+    volunteer: flag(b.volunteer), volunteer_slot: clean(b.volunteer_slot, 60), service: clean(b.service, 80), dinner: flag(b.dinner),
+    donation: pick(b.donation, DONATIONS), transport_required: flag(b.transport_required), standard: clean(b.standard, 40),
+  };
+}
+
+/** Registers a person (by mobile) for an event. Doing it twice just updates the same record. */
+app.post("/registrations", async (c) => {
+  needStaff(c);
+  const b = await body(c);
+  const mob = normalizeMobile(b.mob);
+  const event = clean(b.event, 60);
+  if (!mob) throw bad("Enter a valid 10-digit mobile number.");
+  if (!(await loadEvents(c)).some((e) => e.code === event)) throw bad("Choose an event.");
+  const erp = erpOf(c);
+  const person = await getRow(erp, mob);
+  if (!person) throw new HttpError(404, "This number is not registered yet. Register the person first.");
+  c.set("log", { target: `${person.full_name} (${mob})` });
+  const d = nonEmpty(regDetails(b));
+  try {
+    await erp.insert(REG, { event_code: event, person: person.name, registered_at: istNow(), ...d });
+    return c.json({ ok: true, created: true }, 201);
+  } catch (e) {
+    if (!isDuplicate(e)) throw e;
+    if (Object.keys(d).length) await erp.update(REG, `${event}-${person.name}`, d);
+    return c.json({ ok: true, created: false });
+  }
+});
+
+const regQuery = (q: Record<string, string>) => {
+  const f: Filters = [];
+  const event = clean(q.event, 60);
+  if (event) f.push(["event_code", "=", event]);
+  const text = clean(q.q, 60).replace(/[%_]/g, "");
+  return { f, event, or: text ? { or_filters: [["person_name", "like", `%${text}%`], ["person_mob", "like", `%${text.replace(/\D/g, "") || text}%`]] } : {} };
+};
+
+app.get("/admin/registrations", async (c) => {
+  needAdmin(c);
+  const q = c.req.query();
+  const { f, or } = regQuery(q);
+  const page = Math.max(0, parseInt(q.page ?? "0", 10) || 0);
+  const erp = erpOf(c);
+  const [rows, total, volunteers, dinner, donors, transport] = await Promise.all([
+    erp.list<Record<string, unknown>>(REG, REG_COLS, f, { ...or, order_by: "registered_at desc", limit_page_length: 50, limit_start: page * 50 }),
+    erp.count(REG, f, or),
+    erp.count(REG, [...f, ["volunteer", "=", 1]]),
+    erp.count(REG, [...f, ["dinner", "=", 1]]),
+    erp.count(REG, [...f, ["donation", "=", "Opted to Donate"]]),
+    erp.count(REG, [...f, ["transport_required", "=", 1]]),
+  ]);
+  return c.json({ rows, page, page_size: 50, summary: { total, volunteers, dinner, donors, transport } });
+});
+
+app.get("/admin/export/registrations", async (c) => {
+  needAdmin(c);
+  const { f, or } = regQuery(c.req.query());
+  const cols = REG_COLS.filter((x) => x !== "name");
+  const rows = await erpOf(c).list<Record<string, unknown>>(REG, cols, f, { ...or, order_by: "registered_at desc", limit_page_length: 0 });
+  return csvResponse(c, "folk-registrations.csv", csv(cols, rows));
+});
+
+// ---------- admin: activity log
+const LOG_FIELDS = ["at", "user_name", "role", "action", "target", "details"];
+const logQuery = (q: Record<string, string>) => {
+  const f: Filters = [];
+  if (clean(q.role, 20)) f.push(["role", "=", clean(q.role, 20)]);
+  if (DATE_RE.test(q.from ?? "")) f.push(["at", ">=", `${q.from} 00:00:00`]);
+  if (DATE_RE.test(q.to ?? "")) f.push(["at", "<=", `${q.to} 23:59:59`]);
+  const text = clean(q.q, 60).replace(/[%_]/g, "");
+  return { f, or: text ? { or_filters: [["user_name", "like", `%${text}%`], ["action", "like", `%${text}%`], ["target", "like", `%${text}%`], ["details", "like", `%${text}%`]] } : {} };
+};
+
+app.get("/admin/logs", async (c) => {
+  needAdmin(c);
+  const q = c.req.query();
+  const { f, or } = logQuery(q);
+  const page = Math.max(0, parseInt(q.page ?? "0", 10) || 0);
+  const erp = erpOf(c);
+  const [rows, total] = await Promise.all([
+    erp.list<Record<string, string>>(ACT, LOG_FIELDS, f, { ...or, order_by: "at desc", limit_page_length: 50, limit_start: page * 50 }),
+    erp.count(ACT, f, or),
+  ]);
+  return c.json({ rows, total, page, page_size: 50 });
+});
+
+app.get("/admin/export/logs", async (c) => {
+  needAdmin(c);
+  const { f, or } = logQuery(c.req.query());
+  const rows = await erpOf(c).list<Record<string, unknown>>(ACT, LOG_FIELDS, f, { ...or, order_by: "at desc", limit_page_length: 0 });
+  return csvResponse(c, "folk-activity-log.csv", csv(LOG_FIELDS, rows));
+});
 
 // ---------- admin: reception (attendance) list, exports
 const rangeFilters = (q: Record<string, string>, tsField: string, eventField = "event_code"): Filters => {
@@ -977,7 +1143,7 @@ app.get("/admin/export/attendance", async (c) => {
   return csvResponse(c, "folk-attendance.csv", csv(ATT_COLS, rows));
 });
 
-const LOG_COLS = ["called_at", "person_name", "person_mob", "coordinator_name", "event_code", "status", "note"];
+const LOG_COLS = ["called_at", "person_name", "person_mob", "coordinator_name", "legacy_caller", "event_code", "status", "note"];
 app.get("/admin/export/calls", async (c) => {
   needAdmin(c);
   const rows = await erpOf(c).list<Record<string, unknown>>(LOG, LOG_COLS, rangeFilters(c.req.query(), "called_at"), { order_by: "called_at desc", limit_page_length: 0 });

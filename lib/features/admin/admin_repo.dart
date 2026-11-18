@@ -52,6 +52,13 @@ class AdminRepo {
   Future<void> addEvent(String code, String name) => _api.post('/admin/events', body: {'code': code, 'name': name});
   Future<void> setCurrentEvent(String code) => _api.post('/admin/events/${Uri.encodeComponent(code)}/current');
 
+  /// One page (50) of registrations for an event, with the totals shown at the top.
+  Future<Map<String, dynamic>> registrations(Map<String, String> filters, int page) =>
+      _api.get('/admin/registrations', query: {...filters, 'page': page});
+
+  /// One page (50) of the activity log, newest first.
+  Future<Map<String, dynamic>> logs(Map<String, String> filters, int page) => _api.get('/admin/logs', query: {...filters, 'page': page});
+
   Future<Map<String, dynamic>> analytics(Map<String, String> filters) => _api.get('/admin/analytics', query: filters);
 
   /// Downloads a CSV and opens the phone's share sheet (save to Drive, send on WhatsApp, etc.).
