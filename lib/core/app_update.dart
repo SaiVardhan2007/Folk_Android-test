@@ -1,5 +1,6 @@
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
+import 'package:ota_update/ota_update.dart';
 import 'package:package_info_plus/package_info_plus.dart';
 import 'package:url_launcher/url_launcher.dart';
 
@@ -88,12 +89,62 @@ class _UpdateGateState extends ConsumerState<UpdateGate> with WidgetsBindingObse
         ],
       ),
     );
-    if (go == true) await _open(u.url);
+    if (go == true) await _install(u.url);
   }
 
-  Future<void> _open(String url) async {
+  /// Fallback: the phone's browser downloads the file (used only if the in-app download fails).
+  Future<void> _openInBrowser(String url) async {
     final uri = Uri.tryParse(url);
     if (uri != null) await launchUrl(uri, mode: LaunchMode.externalApplication);
+  }
+
+  /// Downloads the new version inside the app (with a progress bar) and opens Android's installer. Android always asks the
+  /// user to tap Install once; an app cannot install itself silently. If the download fails, the browser is used instead.
+  Future<void> _install(String url) async {
+    final ctx = widget.navigatorKey.currentContext;
+    if (ctx == null) return _openInBrowser(url);
+    final progress = ValueNotifier<int?>(null);
+    var dialogOpen = true;
+    showDialog<void>(
+      context: ctx,
+      barrierDismissible: false,
+      builder: (c) => PopScope(
+        canPop: false,
+        child: AlertDialog(
+          title: const Text('Downloading update'),
+          content: ValueListenableBuilder<int?>(
+            valueListenable: progress,
+            builder: (context, p, _) => Column(
+              mainAxisSize: MainAxisSize.min,
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                LinearProgressIndicator(value: p == null ? null : p / 100, minHeight: 8),
+                const SizedBox(height: kGapM),
+                Text(p == null ? 'Starting...' : '$p%  •  When it finishes, tap Install.'),
+              ],
+            ),
+          ),
+        ),
+      ),
+    ).whenComplete(() => dialogOpen = false);
+    var failed = false;
+    try {
+      await for (final e in OtaUpdate().execute(url, destinationFilename: 'FOLK-Tracker.apk')) {
+        if (e.status == OtaStatus.DOWNLOADING) {
+          progress.value = int.tryParse(e.value ?? '');
+        } else if (e.status == OtaStatus.INSTALLING || e.status == OtaStatus.INSTALLATION_DONE || e.status == OtaStatus.CANCELED) {
+          break;
+        } else {
+          failed = true;
+          break;
+        }
+      }
+    } catch (_) {
+      failed = true;
+    }
+    if (dialogOpen && ctx.mounted) Navigator.of(ctx, rootNavigator: true).pop();
+    progress.dispose();
+    if (failed) await _openInBrowser(url);
   }
 
   @override
@@ -101,7 +152,7 @@ class _UpdateGateState extends ConsumerState<UpdateGate> with WidgetsBindingObse
     final build = ref.watch(installedBuildProvider).value;
     final u = ref.watch(appUpdateProvider).value;
     if (build == null || u == null || u.url.isEmpty) return widget.child;
-    if (u.mustUpdate(build)) return _RequiredUpdate(message: u.message, onUpdate: () => _open(u.url));
+    if (u.mustUpdate(build)) return _RequiredUpdate(message: u.message, onUpdate: () => _install(u.url));
     if (u.canUpdate(build)) WidgetsBinding.instance.addPostFrameCallback((_) => mounted ? _offer(u) : null);
     return widget.child;
   }
