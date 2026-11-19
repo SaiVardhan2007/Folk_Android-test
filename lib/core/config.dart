@@ -4,7 +4,7 @@ import 'package:flutter/material.dart' show ThemeMode;
 const String kApiBaseUrl = 'https://folk-api.jayadeva-jydd.workers.dev';
 
 /// The website address (the same app in a browser). The API accepts browser requests from here (see WEB_ORIGINS in the backend).
-const String kWebUrl = 'https://folk.hmh.in';
+const String kWebUrl = 'https://folk.hkmh.in';
 
 /// Seconds before "send the code again" is allowed (the server enforces the same 30 s).
 const int kOtpResendSeconds = 30;

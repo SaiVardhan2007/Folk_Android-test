@@ -152,7 +152,7 @@ async function activityLog(c: Ctx, next: () => Promise<void>) {
 }
 // The website calls this API from the browser. Bearer tokens only, no cookies, so no credentials mode.
 // Allowed: the real domain, the Cloudflare Pages address and its per-deploy previews, and local `flutter run -d chrome`.
-const WEB_ORIGINS = ["https://folk.hmh.in", "https://folk-web.pages.dev"];
+const WEB_ORIGINS = ["https://folk.hkmh.in", "https://folk-web.pages.dev"];
 const WEB_ORIGIN_PATTERNS = [/^https:\/\/[a-z0-9-]+\.folk-web\.pages\.dev$/, /^http:\/\/(localhost|127\.0\.0\.1)(:\d+)?$/];
 const webOrigin = (o: string) => (WEB_ORIGINS.includes(o) || WEB_ORIGIN_PATTERNS.some((r) => r.test(o)) ? o : null);
 app.use("*", cors({ origin: webOrigin, allowMethods: ["GET", "POST", "PUT", "PATCH", "DELETE"], allowHeaders: ["Authorization", "Content-Type"], maxAge: 86400 }));
