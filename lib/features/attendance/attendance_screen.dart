@@ -1,3 +1,4 @@
+import 'package:flutter/foundation.dart' show kIsWeb;
 import 'dart:async';
 
 import 'package:flutter/material.dart';
@@ -427,12 +428,14 @@ class _AttendanceScreenState extends ConsumerState<AttendanceScreen> with Widget
               label: Text(isNew ? 'Register & Mark Attendance' : 'Mark Attendance'),
               style: FilledButton.styleFrom(backgroundColor: context.colors.success),
             ),
-            const SizedBox(height: kGapS),
-            OutlinedButton.icon(
-              onPressed: _busyN.value ? null : () => _mark(isNew: isNew, print: true),
-              icon: const Icon(Icons.print_outlined),
-              label: Text(isNew ? 'Register, Mark & Print Receipt' : 'Mark & Print Receipt'),
-            ),
+            if (!kIsWeb) ...[ // thermal printers are reached over Bluetooth/USB, only in the Android app
+              const SizedBox(height: kGapS),
+              OutlinedButton.icon(
+                onPressed: _busyN.value ? null : () => _mark(isNew: isNew, print: true),
+                icon: const Icon(Icons.print_outlined),
+                label: Text(isNew ? 'Register, Mark & Print Receipt' : 'Mark & Print Receipt'),
+              ),
+            ],
           ],
         ),
       ),

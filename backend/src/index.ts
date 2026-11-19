@@ -1,19 +1,21 @@
 // FOLK Tracker API: a thin, fast layer between the Flutter app and ERPNext.
 import { Hono } from "hono";
+import { cors } from "hono/cors";
 import type { Context } from "hono";
 import { Erp, ErpError, type Filters } from "./erp";
-import { hashPassword, verifyPassword, sha256Hex, randomCode, signToken, verifyToken } from "./crypto";
+import { sha256Hex, randomCode, signToken, verifyToken } from "./crypto";
 import { analytics } from "./analytics";
+import { sendOtpSms } from "./sms";
 import { attendanceAlert, defaultsOf, sendTemplate, welcomeMessage } from "./whatsapp";
 import { buildRows, guessMapping, IMPORT_FIELDS, ImportError, loadSheetCsv, MAX_IMPORT_BYTES, MAX_IMPORT_ROWS, parseCsv, type ImportField, type ImportRow, type Mapping } from "./importer";
 import { notFoundPage, pageHeaders, renderPage, type PageConfig } from "./publicPage";
 import { distribute, FOLLOW_UP, NOTE_REQUIRED, PENDING, POSITIVE, STATUSES, type Coord } from "./calls";
-import { DEFAULT_TAGS, DONATIONS, FEEDBACKS, GENDERS, LEVELS, MIN_PASSWORD, OCCUPATIONS, STAYS, type Bindings, type Session, type Vars } from "./types";
+import { CONTACT_TAGS, DEFAULT_TAGS, DONATIONS, NOT_INTERESTED, FEEDBACKS, GENDERS, LEVELS, OCCUPATIONS, STAYS, type Bindings, type Session, type Vars } from "./types";
 
 type Ctx = Context<{ Bindings: Bindings; Variables: Vars }>;
 const app = new Hono<{ Bindings: Bindings; Variables: Vars }>();
 
-const TOKEN_TTL = 7 * 24 * 3600;
+const TOKEN_TTL = 180 * 24 * 3600; // renewed each time the app opens, so active users are never signed out
 const PERSON = "FOLK Users";
 const ATT = "FOLK Attendance";
 const ASG = "FOLK Assignment";
@@ -57,12 +59,12 @@ const erpOf = (c: Ctx) => new Erp(c.env);
 type Row = {
   name: string; mob_no: string; full_name: string; gender?: string; level?: string; occupation?: string; profession?: string; pg_name?: string;
   event_code?: string; user_tag?: string; is_active?: number; attendance_count?: number; last_attended_on?: string | null;
-  registered_by?: string; password_hash?: string; reset_code_hash?: string; reset_code_expires?: string; creation?: string; registered_on?: string;
+  registered_by?: string; reset_code_hash?: string; reset_code_expires?: string; reset_attempts?: number; creation?: string; registered_on?: string;
   venue?: string; gmap_link?: string; call_no?: string; fg_name?: string; fg_mob_no?: string; folk_guide?: string;
-  age?: number; current_stay?: string; skills?: string; interests?: string; chanting_rounds?: number; feedback?: string; comments?: string; not_interested?: number;
+  age?: number; current_stay?: string; skills?: string; interests?: string; chanting_rounds?: number; feedback?: string; comments?: string;
 };
-const PERSON_FIELDS = ["name", "mob_no", "full_name", "gender", "level", "occupation", "profession", "pg_name", "event_code", "user_tag", "is_active", "attendance_count", "last_attended_on", "registered_by", "creation", "venue", "gmap_link", "call_no", "fg_name", "fg_mob_no", "folk_guide", "registered_on", "age", "current_stay", "skills", "interests", "chanting_rounds", "feedback", "comments", "not_interested"];
-const AUTH_FIELDS = [...PERSON_FIELDS, "password_hash", "reset_code_hash", "reset_code_expires"];
+const PERSON_FIELDS = ["name", "mob_no", "full_name", "gender", "level", "occupation", "profession", "pg_name", "event_code", "user_tag", "is_active", "attendance_count", "last_attended_on", "registered_by", "creation", "venue", "gmap_link", "call_no", "fg_name", "fg_mob_no", "folk_guide", "registered_on", "age", "current_stay", "skills", "interests", "chanting_rounds", "feedback", "comments"];
+const AUTH_FIELDS = [...PERSON_FIELDS, "reset_code_hash", "reset_code_expires", "reset_attempts"];
 
 /** What the app is allowed to see about a person. Never includes any hash. */
 const publicPerson = (r: Row) => ({
@@ -72,7 +74,7 @@ const publicPerson = (r: Row) => ({
   registered_by: r.registered_by ?? "", joined: (r.registered_on || r.creation || "").slice(0, 10),
   venue: r.venue ?? "", gmap_link: r.gmap_link ?? "", call_no: r.call_no ?? "", fg_name: r.fg_name ?? "", fg_mob: r.fg_mob_no ?? "", folk_guide: r.folk_guide ?? "",
   age: r.age ?? 0, current_stay: r.current_stay ?? "", skills: r.skills ?? "", interests: r.interests ?? "", chanting_rounds: r.chanting_rounds ?? 0,
-  feedback: r.feedback ?? "", comments: r.comments ?? "", not_interested: !!r.not_interested,
+  feedback: r.feedback ?? "", comments: r.comments ?? "",
 });
 
 // ---------- tiny in-isolate caches (each Cloudflare isolate keeps its own; they only absorb bursts)
@@ -105,9 +107,8 @@ type Body = Record<string, unknown>;
 const str = (v: unknown) => (typeof v === "string" || typeof v === "number" ? String(v).slice(0, 120) : "");
 /** [method, path pattern, what it is called in the log, optional safe detail]. Passwords, codes and keys are never recorded. */
 const ACTIVITY: [string, RegExp, string, ((b: Body, path: string) => string)?][] = [
-  ["POST", /^\/auth\/login$/, "Signed in"],
+  ["POST", /^\/auth\/otp\/verify$/, "Signed in with an SMS code"],
   ["POST", /^\/auth\/signup$/, "Signed up", (b) => str(b.name)],
-  ["POST", /^\/auth\/activate$/, "Set a new password with a code"],
   ["POST", /^\/people$/, "Registered a contact", (b) => str(b.name)],
   ["PUT", /^\/people\/\d+$/, "Edited a contact"],
   ["POST", /^\/attendance$/, "Marked attendance", (b) => `event ${str(b.event)}`],
@@ -119,7 +120,6 @@ const ACTIVITY: [string, RegExp, string, ((b: Body, path: string) => string)?][]
   ["PATCH", /^\/admin\/links\/[^/]+$/, "Changed a registration link", (b) => str(b.title)],
   ["PATCH", /^\/admin\/people\/\d+\/role$/, "Changed a role", (b) => str(b.tag)],
   ["PATCH", /^\/admin\/people\/\d+\/active$/, "Enabled or disabled an account", (b) => (b.active ? "enabled" : "disabled")],
-  ["POST", /^\/admin\/people\/\d+\/reset$/, "Reset a password"],
   ["POST", /^\/admin\/events$/, "Added an event", (b) => str(b.name)],
   ["POST", /^\/admin\/events\/[^/]+\/current$/, "Changed the current event", (_b, path) => `now ${decodeURIComponent(path.split("/")[3] ?? "")}`],
   ["PUT", /^\/admin\/settings$/, "Changed settings", (b) => Object.keys(b).slice(0, 8).join(", ")],
@@ -151,6 +151,9 @@ async function activityLog(c: Ctx, next: () => Promise<void>) {
     c.executionCtx.waitUntil(erpOf(c).insert(ACT, doc).catch((e) => console.error("activity log", e)));
   } catch (e) { console.error("activity log", e); }
 }
+// The website (folk.hmh.in) calls this API from the browser. Bearer tokens only, no cookies, so no credentials mode.
+const WEB_ORIGINS = ["https://folk.hmh.in"];
+app.use("*", cors({ origin: WEB_ORIGINS, allowMethods: ["GET", "POST", "PUT", "PATCH", "DELETE"], allowHeaders: ["Authorization", "Content-Type"], maxAge: 86400 }));
 app.use("*", activityLog);
 
 // ---------- admin-controlled settings (FOLK Settings, a single record)
@@ -199,10 +202,10 @@ async function rateLimit(c: Ctx) {
   const r = await c.env.AUTH_LIMITER?.limit({ key: ip });
   if (r && !r.success) throw new HttpError(429, "Too many attempts. Please wait a minute and try again.");
 }
-const pv = async (hash?: string) => (await sha256Hex(hash ?? "")).slice(0, 12);
-
+/** A session lasts TOKEN_TTL and is renewed whenever the app opens (/me), so people who use the app stay signed in.
+ *  Access ends at once when an admin disables the account or makes it Public (checked on every request). */
 async function issue(c: Ctx, r: Row) {
-  const token = await signToken({ sub: r.name, pv: await pv(r.password_hash) }, c.env.JWT_SECRET, TOKEN_TTL);
+  const token = await signToken({ sub: r.name }, c.env.JWT_SECRET, TOKEN_TTL);
   return { token, user: publicPerson(r) };
 }
 
@@ -212,13 +215,11 @@ async function getRow(erp: Erp, mob: string): Promise<Row | null> {
   return rows[0] ?? null;
 }
 const getById = (erp: Erp, id: string) => erp.get<Row>(PERSON, id);
+/** Every role except the contact roles (Public, Not Interested) can use the app: Coordinator, Admin, and any role an admin adds. */
+const isStaffRow = (r: Row) => !CONTACT_TAGS.includes(r.user_tag || "Public");
 
 async function body(c: Ctx): Promise<Record<string, unknown>> {
   try { return (await c.req.json()) as Record<string, unknown>; } catch { throw bad("Invalid request."); }
-}
-function checkPassword(p: unknown) {
-  if (typeof p !== "string" || p.length < MIN_PASSWORD) throw bad(`Password must be at least ${MIN_PASSWORD} characters.`);
-  return p;
 }
 
 function details(b: Record<string, unknown>) {
@@ -231,7 +232,6 @@ function details(b: Record<string, unknown>) {
     age: intIn(b.age, 1, 120), chanting_rounds: intIn(b.chanting_rounds, 0, 1000),
     current_stay: pick(b.current_stay, STAYS), feedback: pick(b.feedback, FEEDBACKS),
     skills: clean(b.skills, 200), interests: clean(b.interests, 200), comments: clean(b.comments, 500),
-    ...(typeof b.not_interested === "boolean" ? { not_interested: b.not_interested ? 1 : 0 } : {}),
   };
 }
 /** A whole number inside [min, max], or undefined (so the field is left alone). */
@@ -241,76 +241,92 @@ function intIn(v: unknown, min: number, max: number): number | undefined {
   return Number.isFinite(n) && n >= min && n <= max ? n : undefined;
 }
 
+/** Asks for a Coordinator account. There is no password: once approved (or at once, if sign-ups are auto-approved) the person signs in with an SMS code. */
 app.post("/auth/signup", async (c) => {
   await rateLimit(c);
   const b = await body(c);
   const mob = normalizeMobile(b.mob);
   if (!mob) throw bad("Enter a valid 10-digit mobile number.");
-  const password = checkPassword(b.password);
   const name = clean(b.name);
   const erp = erpOf(c);
   const existing = await getRow(erp, mob);
-  if (existing?.password_hash) throw new HttpError(409, "This number already has a password. Please sign in.");
-  const hash = await hashPassword(password);
+  if (existing && isStaffRow(existing)) throw new HttpError(409, "This number already has an account. Sign in with an SMS code.", { has_account: true });
   const approved = (await loadSettings(c)).auto_approve_signups;
-  const pending = (r: Row) => c.json({ pending: true, message: "Your account is created. An admin needs to approve it before you can sign in." }, 202);
+  const reply = () => c.json({ approved, message: approved ? "Your account is ready. We are sending you a code to sign in." : "Your account is created. An admin needs to approve it, then you can sign in with your mobile number." }, 201);
   if (existing) {
-    // Claiming a number a volunteer registered. Only Public contacts can be claimed this way and they become Coordinators;
-    // Coordinator/Admin accounts need a one-time code from an admin (see /auth/activate).
-    if ((existing.user_tag || "Public") !== "Public") {
-      throw new HttpError(403, "This is a staff account. Ask an admin for a one-time code, then tap “Forgot password?” and enter it.", { needs_code: true });
-    }
-    const patch = { password_hash: hash, user_tag: "Coordinator", is_active: approved ? 1 : 0 };
-    await erp.update(PERSON, existing.name, patch);
-    const row = { ...existing, ...patch };
-    return approved ? c.json(await issue(c, row)) : pending(row);
+    // Claiming a number a volunteer registered as a contact: it becomes a Coordinator.
+    await erp.update(PERSON, existing.name, { user_tag: "Coordinator", is_active: approved ? 1 : 0, ...(existing.registered_by ? {} : { registered_by: "self sign-up" }) });
+    memo.delete(`p:${existing.name}`);
+    return reply();
   }
   if (!name) throw bad("Enter your name.");
-  const d = details(b);
-  const doc = { mob_no: mob, full_name: name, ...d, user_tag: "Coordinator", is_active: approved ? 1 : 0, registered_by: "self sign-up", registered_on: istToday(), password_hash: hash };
-  let created: Row;
+  const doc = { mob_no: mob, full_name: name, ...details(b), user_tag: "Coordinator", is_active: approved ? 1 : 0, registered_by: "self sign-up", registered_on: istToday() };
   try {
-    created = (await erp.insert<Row>(PERSON, doc)).data;
+    await erp.insert<Row>(PERSON, doc);
   } catch (e) {
-    if (isDuplicate(e)) throw new HttpError(409, "This number is already registered. Try signing in.");
+    if (isDuplicate(e)) throw new HttpError(409, "This number is already registered. Sign in with an SMS code.", { has_account: true });
     throw e;
   }
-  return approved ? c.json(await issue(c, created), 201) : pending(created);
+  return reply();
 });
 
-app.post("/auth/login", async (c) => {
+// ---------- sign in by SMS code (OTP). No passwords.
+// 1) /auth/otp/send: a random 6-digit code is texted to the number; only its hash is kept (reset_code_hash, 10 minutes).
+// 2) /auth/otp/verify: the right code (max 5 tries per code) signs the person in. The code is then used up.
+const OTP_MINUTES = 10;
+const OTP_MAX_TRIES = 5;
+const OTP_RESEND_SECONDS = 30;
+const erpTime = (ms: number) => new Date(ms + 5.5 * 3600_000).toISOString().replace("T", " ").slice(0, 19);
+const erpMs = (t: string) => Date.parse(t.replace(" ", "T") + "Z") - 5.5 * 3600_000;
+/** The 11-character app hash Android needs at the end of the SMS to read it without asking (SMS Retriever API). */
+const APP_HASH_RE = /^[A-Za-z0-9+/]{11}$/;
+
+/** Only active Coordinators and Admins can sign in. Throws a clear message otherwise. */
+function checkCanSignIn(r: Row | null) {
+  if (!r || !isStaffRow(r)) throw new HttpError(404, "This number does not have a coordinator account. Tap “Sign up” to ask for an account.", { no_account: true });
+  if (r.is_active === 0) throw new HttpError(403, "Your account is waiting for admin approval, or has been disabled.", { pending: true });
+}
+
+app.post("/auth/otp/send", async (c) => {
   await rateLimit(c);
   const b = await body(c);
   const mob = normalizeMobile(b.mob);
+  if (!mob) throw bad("Enter a valid 10-digit mobile number.");
+  const erp = erpOf(c);
+  const r = await getRow(erp, mob);
+  checkCanSignIn(r);
+  // auto_read: the SMS template ends with the app hash, so the app can read the code with no "Allow" prompt.
+  const reply = { ok: true, expires_in_minutes: OTP_MINUTES, resend_after_seconds: OTP_RESEND_SECONDS, auto_read: c.env.OTP_SMS_HAS_APP_HASH === "1" };
+  const sentAt = r!.reset_code_expires ? erpMs(r!.reset_code_expires) - OTP_MINUTES * 60_000 : 0;
+  if (Date.now() - sentAt < OTP_RESEND_SECONDS * 1000) return c.json(reply); // the last code was sent moments ago and is still valid
+  const otp = randomCode();
+  await erp.update(PERSON, r!.name, { reset_code_hash: await sha256Hex(`${mob}:${otp}`), reset_code_expires: erpTime(Date.now() + OTP_MINUTES * 60_000), reset_attempts: 0 });
+  const hash = typeof b.app_hash === "string" && APP_HASH_RE.test(b.app_hash) ? b.app_hash : "";
+  if (!(await sendOtpSms(c.env, mob, otp, hash))) {
+    await erp.update(PERSON, r!.name, { reset_code_hash: "", reset_code_expires: null }); // so "send again" is not blocked
+    throw new HttpError(502, "We could not send the SMS right now. Please try again in a minute.");
+  }
+  return c.json(reply);
+});
+
+app.post("/auth/otp/verify", async (c) => {
+  await rateLimit(c);
+  const b = await body(c);
+  const mob = normalizeMobile(b.mob);
+  const otp = clean(b.otp, 12);
   const erp = erpOf(c);
   const r = mob ? await getRow(erp, mob) : null;
-  const good = await verifyPassword(String(b.password ?? ""), r?.password_hash);
-  if (!r || !good) {
-    if (r && !r.password_hash) throw new HttpError(401, "No password yet for this number. Use “Sign up”.", { no_password: true });
-    throw new HttpError(401, "Incorrect mobile number or password.");
+  const wrong = new HttpError(400, "That code is wrong or has expired. Check the SMS or ask for a new code.");
+  if (!r || !otp || !r.reset_code_hash || !r.reset_code_expires || erpMs(r.reset_code_expires) < Date.now()) throw wrong;
+  if ((r.reset_attempts ?? 0) >= OTP_MAX_TRIES) throw new HttpError(429, "Too many wrong codes. Ask for a new code.");
+  if ((await sha256Hex(`${mob}:${otp}`)) !== r.reset_code_hash) {
+    await erp.update(PERSON, r.name, { reset_attempts: (r.reset_attempts ?? 0) + 1 });
+    throw wrong;
   }
-  if (r.is_active === 0) throw new HttpError(403, "Your account is waiting for admin approval, or has been disabled.", { pending: true });
-  if ((r.user_tag || "Public") === "Public") throw new HttpError(403, "This account cannot sign in.");
+  await erp.update(PERSON, r.name, { reset_code_hash: "", reset_code_expires: null, reset_attempts: 0 }); // single use
+  checkCanSignIn(r);
   c.set("actor", { id: r.name, mob: r.mob_no, name: r.full_name, tag: r.user_tag || "Public" });
   return c.json(await issue(c, r));
-});
-
-/** Set a new password using the one-time code an admin gave you (also how staff accounts are first activated). */
-app.post("/auth/activate", async (c) => {
-  await rateLimit(c);
-  const b = await body(c);
-  const mob = normalizeMobile(b.mob);
-  const password = checkPassword(b.password);
-  const code = clean(b.code, 12);
-  const erp = erpOf(c);
-  const r = mob ? await getRow(erp, mob) : null;
-  const ok = !!(r && code && r.reset_code_hash && r.reset_code_expires && r.reset_code_expires.replace(" ", "T") + "Z" > new Date(Date.now() + 5.5 * 3600_000).toISOString()
-    && (await sha256Hex(`${mob}:${code}`)) === r.reset_code_hash);
-  if (!r || !ok) throw new HttpError(400, "That code is wrong or has expired. Ask an admin for a new one.");
-  const hash = await hashPassword(password);
-  await erp.update(PERSON, r.name, { password_hash: hash, reset_code_hash: "", reset_code_expires: null });
-  memo.delete(`p:${r.name}`);
-  return c.json(await issue(c, { ...r, password_hash: hash }));
 });
 
 // ---------- session middleware for everything below
@@ -318,19 +334,18 @@ async function requireSession(c: Ctx, next: () => Promise<void>) {
   const h = c.req.header("Authorization") ?? "";
   const token = h.startsWith("Bearer ") ? h.slice(7) : "";
   const payload = token ? await verifyToken(token, c.env.JWT_SECRET) : null;
-  if (!payload || typeof payload.sub !== "string") throw new HttpError(401, "Please sign in again.", { signed_out: true });
+  if (!payload || typeof payload.sub !== "string" || payload.purpose) throw new HttpError(401, "Please sign in again.", { signed_out: true });
   const id = payload.sub;
   // Role and active status are re-read (cached 60 s) so changes apply almost immediately.
-  const valid = async (r: Row | null) => !!r?.password_hash && r.is_active !== 0 && (r.user_tag || "Public") !== "Public" && (await pv(r.password_hash)) === payload.pv;
+  const valid = (r: Row | null) => !!r && r.is_active !== 0 && isStaffRow(r);
   let row = await cached(`p:${id}`, 60_000, () => getById(erpOf(c), id));
-  if (!(await valid(row))) {
-    // The cached copy may be stale (e.g. password just changed on another instance): check the live record before rejecting.
+  if (!valid(row)) {
+    // The cached copy may be stale (e.g. just approved on another instance): check the live record before rejecting.
     memo.delete(`p:${id}`);
     row = await cached(`p:${id}`, 60_000, () => getById(erpOf(c), id));
-    if (!(await valid(row))) throw new HttpError(401, "Please sign in again.", { signed_out: true });
+    if (!valid(row)) throw new HttpError(401, "Please sign in again.", { signed_out: true });
   }
-  if (!row) throw new HttpError(401, "Please sign in again.", { signed_out: true });
-  c.set("session", { id, mob: row.mob_no, name: row.full_name, tag: row.user_tag || "Public" } satisfies Session);
+  c.set("session", { id, mob: row!.mob_no, name: row!.full_name, tag: row!.user_tag || "Public" } satisfies Session);
   await next();
 }
 const isAdmin = (s: Session) => s.tag === "Admin";
@@ -354,6 +369,7 @@ app.get("/app/download", async (c) => {
   if (!u.url) throw new HttpError(404, "There is no update to download.");
   const res = await fetch(u.url, { redirect: "follow", headers: { "User-Agent": "folk-api/1.0" } });
   if (!res.ok || !res.body) throw new HttpError(502, "The update file is not available right now. Please try again later.");
+  if ((res.headers.get("Content-Type") ?? "").includes("text/html")) throw new HttpError(502, "The saved download link opens a web page, not the app file. Ask an admin to save a direct .apk link.");
   const h = new Headers({ "Content-Type": "application/vnd.android.package-archive", "Content-Disposition": 'attachment; filename="FOLK-Tracker.apk"', "Cache-Control": "no-store" });
   const len = res.headers.get("Content-Length");
   if (len) h.set("Content-Length", len);
@@ -381,9 +397,10 @@ async function tagOptions(c: Ctx): Promise<string[]> {
   });
 }
 
+/** Who I am, plus a renewed session token (so a phone that keeps using the app stays signed in for good). */
 app.get("/me", async (c) => {
   const r = await getById(erpOf(c), c.get("session").id);
-  return c.json({ user: r ? publicPerson(r) : null });
+  return c.json(r ? await issue(c, r) : { user: null });
 });
 
 /** One call at app start: who I am, the events, and the allowed values for forms. */
@@ -575,9 +592,7 @@ function peopleQuery(q: Record<string, string | undefined>) {
   if (pick(v("level"), LEVELS)) f.push(["level", "=", v("level")]);
   if (pick(v("gender"), GENDERS)) f.push(["gender", "=", v("gender")]);
   if (v("event")) f.push(["event_code", "=", v("event")]);
-  if (v("pw") === "set") f.push(["password_hash", "!=", ""]);
-  if (v("pw") === "unset") f.push(["password_hash", "=", ""]);
-  if (v("pending") === "1") { f.push(["is_active", "=", 0]); f.push(["password_hash", "!=", ""]); }
+  if (v("pending") === "1") { f.push(["is_active", "=", 0]); f.push(["registered_by", "=", "self sign-up"]); f.push(["user_tag", "not in", CONTACT_TAGS]); }
   if (v("att") === "yes") f.push(["attendance_count", ">", 0]);
   if (v("att") === "no") f.push(["attendance_count", "=", 0]);
   if (DATE_RE.test(v("from"))) f.push(["registered_on", ">=", v("from")]);
@@ -593,13 +608,13 @@ app.get("/admin/people", async (c) => {
   const erp = erpOf(c);
   const extra = q.or_filters ? { or_filters: q.or_filters } : {};
   const [rows, tot] = await Promise.all([
-    erp.list<Row & { password_hash?: string }>(PERSON, [...PERSON_FIELDS, "password_hash"], q.filters, { ...extra, order_by: q.order_by, limit_page_length: PAGE_SIZE, limit_start: (q.page - 1) * PAGE_SIZE }),
+    erp.list<Row>(PERSON, PERSON_FIELDS, q.filters, { ...extra, order_by: q.order_by, limit_page_length: PAGE_SIZE, limit_start: (q.page - 1) * PAGE_SIZE }),
     // Frappe v16 requires dict syntax for SQL functions in `fields`.
     erp.list<{ total: number }>(PERSON, [{ COUNT: "*", as: "total" }] as unknown as string[], q.filters, { ...extra, limit_page_length: 1 }),
   ]);
   return c.json({
     page: q.page, page_size: PAGE_SIZE, total: tot[0]?.total ?? rows.length,
-    people: rows.map((r) => ({ ...publicPerson(r), has_password: !!r.password_hash })),
+    people: rows.map(publicPerson),
   });
 });
 
@@ -618,6 +633,11 @@ app.patch("/admin/people/:mob/role", async (c) => {
   if (!row) throw new HttpError(404, "Person not found.");
   await erp.update(PERSON, row.name, { user_tag: tag });
   memo.delete(`p:${row.name}`);
+  if (tag === NOT_INTERESTED) {
+    // Take them off every coordinator's list straight away. Calls already made (and their history) are kept.
+    const open = await erp.list<{ name: string }>(ASG, ["name"], [["person", "=", row.name], ["status", "=", PENDING]], { limit_page_length: 0 });
+    if (open.length) await erp.call("POST", "/api/method/frappe.desk.reportview.delete_items", { items: JSON.stringify(open.map((x) => x.name)), doctype: ASG });
+  }
   return c.json({ ok: true });
 });
 
@@ -634,23 +654,6 @@ app.patch("/admin/people/:mob/active", async (c) => {
   await erp.update(PERSON, row.name, { is_active: b.active ? 1 : 0 });
   memo.delete(`p:${row.name}`);
   return c.json({ ok: true });
-});
-
-/** Admin reset: removes the old password and returns a one-time code (shown once) to read out to the person. */
-app.post("/admin/people/:mob/reset", async (c) => {
-  needAdmin(c);
-  const s = c.get("session");
-  const mob = normalizeMobile(c.req.param("mob"));
-  if (!mob) throw bad("Invalid mobile number.");
-  if (mob === s.mob) throw new HttpError(403, "You can't reset your own password here.");
-  const erp = erpOf(c);
-  const row = await getRow(erp, mob);
-  if (!row) throw new HttpError(404, "Person not found.");
-  const code = randomCode();
-  const expires = new Date(Date.now() + 5.5 * 3600_000 + 24 * 3600_000).toISOString().replace("T", " ").slice(0, 19);
-  await erp.update(PERSON, row.name, { password_hash: "", reset_code_hash: await sha256Hex(`${mob}:${code}`), reset_code_expires: expires });
-  memo.delete(`p:${row.name}`);
-  return c.json({ code, expires_in_hours: 24 });
 });
 
 // ---------- admin: events
@@ -740,7 +743,7 @@ app.get("/admin/export/people", async (c) => {
   const q = peopleQuery(c.req.query());
   const rows = await erpOf(c).list<Row>(PERSON, PERSON_FIELDS, q.filters, { ...(q.or_filters && { or_filters: q.or_filters }), order_by: q.order_by, limit_page_length: 0 });
   return csvResponse(c, "folk-people.csv", csv(
-    ["mob_no", "full_name", "gender", "level", "occupation", "profession", "pg_name", "venue", "gmap_link", "call_no", "fg_name", "fg_mob_no", "event_code", "user_tag", "attendance_count", "last_attended_on", "registered_by", "registered_on", "age", "current_stay", "skills", "interests", "chanting_rounds", "feedback", "comments", "not_interested"], rows));
+    ["mob_no", "full_name", "gender", "level", "occupation", "profession", "pg_name", "venue", "gmap_link", "call_no", "fg_name", "fg_mob_no", "event_code", "user_tag", "attendance_count", "last_attended_on", "registered_by", "registered_on", "age", "current_stay", "skills", "interests", "chanting_rounds", "feedback", "comments"], rows));
 });
 
 app.get("/reports/attendance", async (c) => {
@@ -777,6 +780,7 @@ app.put("/admin/settings", async (c) => {
     const u = b.app_update as Record<string, unknown>;
     const next = updateFrom({ ...(await loadSettings(c)).app_update, ...u });
     if (typeof u.url === "string" && u.url.trim() && !next.url) throw bad("The update link must start with https://");
+    if (/^https:\/\/(drive|docs)\.google\.com|dropbox\.com|onedrive|1drv\.ms|wetransfer/i.test(next.url)) throw bad("File-sharing pages (Google Drive, Dropbox...) are not direct downloads. Use a direct link to the .apk file, for example a GitHub release.");
     if (next.min_build > next.latest_build) throw bad("The minimum build cannot be higher than the latest build.");
     patch.app_update = JSON.stringify(next);
   }
@@ -996,8 +1000,8 @@ async function bulkUpdate(erp: Erp, doctype: string, rows: ({ name: string } & R
 async function planAssign(c: Ctx, a: AssignBody, commit: boolean) {
   if (!a.event) throw bad("Choose the event these calls are for.");
   const erp = erpOf(c);
-  // Pool: Public contacts only (staff are never called), matching the filters.
-  const f: Filters = [["user_tag", "=", "Public"], ["is_active", "=", 1], ["not_interested", "=", 0]];
+  // Pool: Public contacts only, matching the filters. Staff and "Not Interested" contacts are never called.
+  const f: Filters = [["user_tag", "=", "Public"], ["is_active", "=", 1]];
   if (a.level) f.push(["level", "=", a.level]);
   if (a.gender) f.push(["gender", "=", a.gender]);
   if (a.reg_event) f.push(["event_code", "=", a.reg_event]);
@@ -1534,7 +1538,7 @@ app.get("/admin/attendance", async (c) => {
     erp.list<{ person: string; n: number }>(ATT, aggregate({ COUNT: "*", as: "n" }, "person"), f, { group_by: "person", limit_page_length: 0 }),
     erp.list<Record<string, string>>(ATT, ["name", ...ATT_COLS], f, { ...search, order_by: "ts desc", limit_page_length: 100, limit_start: page * 100 }),
     erp.list<{ status: string; n: number }>(LOG, aggregate({ COUNT: "*", as: "n" }, "status"), lf, { group_by: "status", limit_page_length: 0 }),
-    erp.count(PERSON, [["user_tag", "=", "Public"]]),
+    erp.count(PERSON, [["user_tag", "in", CONTACT_TAGS]]),
   ]);
   const made = calls.reduce((t, x) => t + x.n, 0);
   const positive = calls.filter((x) => POSITIVE.includes(x.status)).reduce((t, x) => t + x.n, 0);
@@ -1682,7 +1686,7 @@ app.post("/admin/import/commit", async (c) => {
     const edits: Record<string, unknown>[] = [];
     for (const r of there) {
       const o = old.get(r.mob)!;
-      if (o.user_tag && o.user_tag !== "Public") { result.skipped++; continue; } // never change staff accounts through an import
+      if (o.user_tag && !CONTACT_TAGS.includes(String(o.user_tag))) { result.skipped++; continue; } // never change staff accounts through an import
       const ch = changesFor(o, r, policy);
       if (!ch.length) { result.skipped++; continue; }
       edits.push({ doctype: PERSON, docname: String(o.name), ...Object.fromEntries(ch.map((x) => [x.field, x.to])) });

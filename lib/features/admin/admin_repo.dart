@@ -1,7 +1,6 @@
-import 'dart:io';
+import 'dart:convert';
 
 import 'package:flutter_riverpod/flutter_riverpod.dart';
-import 'package:path_provider/path_provider.dart';
 import 'package:share_plus/share_plus.dart';
 
 import '../../core/api.dart';
@@ -27,9 +26,6 @@ class AdminRepo {
 
   Future<void> setRole(String mob, String tag) => _api.patch('/admin/people/$mob/role', body: {'tag': tag});
   Future<void> setActive(String mob, bool active) => _api.patch('/admin/people/$mob/active', body: {'active': active});
-
-  /// Returns the one-time code to read out to the person. The old password is removed.
-  Future<String> resetPassword(String mob) async => (await _api.post('/admin/people/$mob/reset'))['code'] as String;
 
   Future<Map<String, dynamic>> settings() async => Map<String, dynamic>.from((await _api.get('/admin/settings'))['settings'] as Map);
   Future<void> saveSettings(Map<String, dynamic> patch) => _api.put('/admin/settings', body: patch);
@@ -79,12 +75,11 @@ class AdminRepo {
   /// Downloads a CSV and opens the phone's share sheet (save to Drive, send on WhatsApp, etc.).
   Future<void> shareCsv(String apiPath, String fileName, {Map<String, dynamic>? query}) async {
     final text = await _api.getText(apiPath, query: query);
-    final dir = await getTemporaryDirectory();
-    final file = File('${dir.path}/$fileName');
-    await file.writeAsString(text);
+    // From memory, so it works on the phone (share sheet) and on the website (browser share or download).
     await SharePlus.instance.share(
       ShareParams(
-        files: [XFile(file.path, mimeType: 'text/csv')],
+        files: [XFile.fromData(utf8.encode(text), mimeType: 'text/csv', name: fileName)],
+        fileNameOverrides: [fileName],
         subject: fileName,
       ),
     );

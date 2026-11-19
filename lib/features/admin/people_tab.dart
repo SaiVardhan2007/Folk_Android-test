@@ -1,7 +1,6 @@
 import 'dart:async';
 
 import 'package:flutter/material.dart';
-import 'package:flutter/services.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import '../../core/api.dart';
@@ -198,9 +197,7 @@ class _PeopleTabState extends ConsumerState<PeopleTab> with AutomaticKeepAliveCl
                       if (p.isPending)
                         Text('Awaiting approval', style: text.bodySmall?.copyWith(color: context.colors.warning))
                       else if (!p.isActive)
-                        Text('Disabled', style: text.bodySmall?.copyWith(color: context.colors.danger))
-                      else if (!p.hasPassword)
-                        Text('No password', style: text.bodySmall?.copyWith(color: context.colors.warning)),
+                        Text('Disabled', style: text.bodySmall?.copyWith(color: context.colors.danger)),
                     ],
                   ),
                 ),
@@ -274,13 +271,6 @@ class _FilterSheetState extends State<_FilterSheet> {
               onChanged: (v) => setState(() => f['pending'] = v),
             ),
             OptionDropdown(
-              label: 'Password',
-              value: f['pw'] ?? '',
-              options: const ['set', 'unset'],
-              labelOf: (v) => v == 'set' ? 'Has a password' : 'No password yet',
-              onChanged: (v) => setState(() => f['pw'] = v),
-            ),
-            OptionDropdown(
               label: 'Attendance',
               value: f['att'] ?? '',
               options: const ['yes', 'no'],
@@ -300,7 +290,6 @@ class _FilterSheetState extends State<_FilterSheet> {
                   'level': '',
                   'gender': '',
                   'event': '',
-                  'pw': '',
                   'att': '',
                   'pending': '',
                 }),
@@ -343,70 +332,6 @@ class _ManageSheetState extends ConsumerState<_ManageSheet> {
     }
   }
 
-  Future<void> _reset() async {
-    final p = widget.person;
-    final ok = await showDialog<bool>(
-      context: context,
-      builder: (c) => AlertDialog(
-        title: Text('Reset ${p.name}\'s password?'),
-        content: const Text(
-          'Their current password stops working. You will get a one-time code to give them, so they can choose a new password. You never see the password itself.',
-        ),
-        actions: [
-          TextButton(onPressed: () => Navigator.pop(c, false), child: const Text('Cancel')),
-          FilledButton(
-            style: FilledButton.styleFrom(minimumSize: const Size(100, 48), backgroundColor: context.colors.danger),
-            onPressed: () => Navigator.pop(c, true),
-            child: const Text('Reset'),
-          ),
-        ],
-      ),
-    );
-    if (ok != true || !mounted) return;
-    setState(() => _busy = true);
-    try {
-      final code = await ref.read(adminRepoProvider).resetPassword(p.mob);
-      if (!mounted) return;
-      await showDialog<void>(
-        context: context,
-        barrierDismissible: false,
-        builder: (c) => AlertDialog(
-          title: const Text('One-time code'),
-          content: Column(
-            mainAxisSize: MainAxisSize.min,
-            children: [
-              Text(
-                'Tell ${p.name} this code. It works once and expires in 24 hours. It will not be shown again.',
-                style: Theme.of(c).textTheme.bodyMedium,
-              ),
-              const SizedBox(height: 16),
-              SelectableText(code, style: Theme.of(c).textTheme.displaySmall?.copyWith(letterSpacing: 8, fontWeight: FontWeight.bold)),
-              const SizedBox(height: 8),
-              Text('They open the app → "Have a code" → enter their number, this code and a new password.', style: Theme.of(c).textTheme.bodySmall),
-            ],
-          ),
-          actions: [
-            TextButton.icon(
-              onPressed: () => Clipboard.setData(ClipboardData(text: code)),
-              icon: const Icon(Icons.copy),
-              label: const Text('Copy'),
-            ),
-            FilledButton(
-              style: FilledButton.styleFrom(minimumSize: const Size(100, 48)),
-              onPressed: () => Navigator.pop(c),
-              child: const Text('Done'),
-            ),
-          ],
-        ),
-      );
-      if (mounted) Navigator.pop(context, true);
-    } on ApiException catch (e) {
-      if (mounted) showMessage(context, e.message, error: true);
-    } finally {
-      if (mounted) setState(() => _busy = false);
-    }
-  }
-
   @override
   Widget build(BuildContext context) {
     final p = widget.person;
@@ -437,38 +362,36 @@ class _ManageSheetState extends ConsumerState<_ManageSheet> {
           ],
         ),
         const SizedBox(height: kGapL),
-        DetailSection(title: 'Contact', rows: [
-          ('Mobile', p.mob),
-          ('Call number', p.callNo),
-        ]),
-        DetailSection(title: 'About', rows: [
-          ('Gender', genderLabel(p.gender)),
-          ('Level', p.level),
-          ('Age', p.age > 0 ? '${p.age}' : ''),
-          ('Occupation', p.occupation),
-          ('Company / College', p.profession),
-          ('PG / Residence', p.pgName),
-          ('Staying', p.currentStay),
-          ('Chanting rounds', p.chantingRounds > 0 ? '${p.chantingRounds}' : ''),
-          ('Skills', p.skills),
-          ('Interests', p.interests),
-        ]),
-        DetailSection(title: 'FOLK Guide', rows: [
-          ('Folk Guide', p.folkGuide),
-          ('Guide name', p.fgName),
-          ('Guide mobile', p.fgMob),
-        ]),
-        DetailSection(title: 'Attendance', rows: [
-          ('Attended', '${p.attendanceCount} time${p.attendanceCount == 1 ? '' : 's'}'),
-          ('Last attended', p.lastAttendedOn),
-          ('Joined', p.joined),
-          ('Feedback', p.feedback),
-          ('Comments', p.comments),
-          ('Not interested', p.notInterested ? 'Yes (left out of call lists)' : ''),
-        ]),
+        DetailSection(title: 'Contact', rows: [('Mobile', p.mob), ('Call number', p.callNo)]),
+        DetailSection(
+          title: 'About',
+          rows: [
+            ('Gender', genderLabel(p.gender)),
+            ('Level', p.level),
+            ('Age', p.age > 0 ? '${p.age}' : ''),
+            ('Occupation', p.occupation),
+            ('Company / College', p.profession),
+            ('PG / Residence', p.pgName),
+            ('Staying', p.currentStay),
+            ('Chanting rounds', p.chantingRounds > 0 ? '${p.chantingRounds}' : ''),
+            ('Skills', p.skills),
+            ('Interests', p.interests),
+          ],
+        ),
+        DetailSection(title: 'FOLK Guide', rows: [('Folk Guide', p.folkGuide), ('Guide name', p.fgName), ('Guide mobile', p.fgMob)]),
+        DetailSection(
+          title: 'Attendance',
+          rows: [
+            ('Attended', '${p.attendanceCount} time${p.attendanceCount == 1 ? '' : 's'}'),
+            ('Last attended', p.lastAttendedOn),
+            ('Joined', p.joined),
+            ('Feedback', p.feedback),
+            ('Comments', p.comments),
+          ],
+        ),
         const SizedBox(height: 4),
         if (isMe)
-          Text('This is your own account: you can\'t change your role or password here.', style: text.bodyMedium)
+          Text('This is your own account: you can\'t change your role here.', style: text.bodyMedium)
         else ...[
           OptionDropdown(
             label: 'Role',
@@ -483,8 +406,6 @@ class _ManageSheetState extends ConsumerState<_ManageSheet> {
             onPressed: _busy || _tag == p.tag ? null : () => _run(() => repo.setRole(p.mob, _tag), 'Role changed to $_tag'),
             child: const Text('Save role'),
           ),
-          const SizedBox(height: 12),
-          OutlinedButton.icon(onPressed: _busy ? null : _reset, icon: const Icon(Icons.lock_reset), label: const Text('Reset password')),
           const SizedBox(height: 12),
           OutlinedButton.icon(
             onPressed: _busy ? null : () => _run(() => repo.setActive(p.mob, !p.isActive), p.isActive ? 'Account disabled' : 'Account enabled'),

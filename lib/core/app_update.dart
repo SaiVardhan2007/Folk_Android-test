@@ -1,8 +1,8 @@
+import 'package:flutter/foundation.dart' show kIsWeb;
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:ota_update/ota_update.dart';
 import 'package:package_info_plus/package_info_plus.dart';
-import 'package:url_launcher/url_launcher.dart';
 
 import 'api.dart';
 import 'layout.dart';
@@ -92,17 +92,12 @@ class _UpdateGateState extends ConsumerState<UpdateGate> with WidgetsBindingObse
     if (go == true) await _install(u.url);
   }
 
-  /// Fallback: the phone's browser downloads the file (used only if the in-app download fails).
-  Future<void> _openInBrowser(String url) async {
-    final uri = Uri.tryParse(url);
-    if (uri != null) await launchUrl(uri, mode: LaunchMode.externalApplication);
-  }
-
   /// Downloads the new version inside the app (with a progress bar) and opens Android's installer. Android always asks the
-  /// user to tap Install once; an app cannot install itself silently. If the download fails, the browser is used instead.
+  /// user to tap Install once; an app cannot install itself silently. A failed download is reported here with "Try again":
+  /// the app never sends the user to a browser or a file-sharing site.
   Future<void> _install(String url) async {
     final ctx = widget.navigatorKey.currentContext;
-    if (ctx == null) return _openInBrowser(url);
+    if (ctx == null) return;
     final progress = ValueNotifier<int?>(null);
     var dialogOpen = true;
     showDialog<void>(
@@ -144,11 +139,28 @@ class _UpdateGateState extends ConsumerState<UpdateGate> with WidgetsBindingObse
     }
     if (dialogOpen && ctx.mounted) Navigator.of(ctx, rootNavigator: true).pop();
     progress.dispose();
-    if (failed) await _openInBrowser(url);
+    if (!failed || !ctx.mounted) return;
+    final retry = await showDialog<bool>(
+      context: ctx,
+      builder: (c) => AlertDialog(
+        title: const Text('Update could not download'),
+        content: const Text('Please check your internet connection and try again.'),
+        actions: [
+          TextButton(onPressed: () => Navigator.pop(c, false), child: const Text('Close')),
+          FilledButton(
+            style: FilledButton.styleFrom(minimumSize: const Size(100, 48)),
+            onPressed: () => Navigator.pop(c, true),
+            child: const Text('Try again'),
+          ),
+        ],
+      ),
+    );
+    if (retry == true) await _install(url);
   }
 
   @override
   Widget build(BuildContext context) {
+    if (kIsWeb) return widget.child; // the website is always the latest version; APK updates are for the Android app
     final build = ref.watch(installedBuildProvider).value;
     final u = ref.watch(appUpdateProvider).value;
     if (build == null || u == null || u.url.isEmpty) return widget.child;

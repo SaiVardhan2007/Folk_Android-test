@@ -7,6 +7,11 @@ export type Bindings = {
   WHATSAPP_API_KEY: string;
   WHATSAPP_URL: string;
   WHATSAPP_PHONE_NUMBER_ID: string;
+  /** MSG91 SMS (sign-in code). Both are Worker secrets. */
+  MSG91_AUTH_KEY?: string;
+  MSG91_OTP_TEMPLATE_ID?: string;
+  /** "1" once the MSG91 template ends with ##hash## (lets Android read the code with no prompt). */
+  OTP_SMS_HAS_APP_HASH?: string;
   /** Used in the welcome message when the contact has no venue / map link / FOLK guide number (call_no) of their own. */
   WELCOME_VENUE?: string;
   WELCOME_MAP_LINK?: string;
@@ -25,5 +30,7 @@ export const OCCUPATIONS = ["Student", "Job Search", "Working", "Business", "Oth
 export const STAYS = ["With Parents", "In Hostel"] as const;
 export const FEEDBACKS = ["Excellent", "Good"] as const;
 export const DONATIONS = ["Pending", "Opted to Donate"] as const;
-export const DEFAULT_TAGS = ["Public", "Coordinator", "Admin"];
-export const MIN_PASSWORD = 8;
+export const DEFAULT_TAGS = ["Public", "Not Interested", "Coordinator", "Admin"];
+/** Contacts, never app users. Only "Public" contacts are offered for calling; "Not Interested" ones are left out. */
+export const NOT_INTERESTED = "Not Interested";
+export const CONTACT_TAGS = ["Public", NOT_INTERESTED];

@@ -82,7 +82,7 @@ class Api {
   final TokenStore _tokens;
 
   /// Set by the auth controller: called when the server says the session is no longer valid
-  /// (token expired, password reset, account disabled).
+  /// (token expired, account disabled or made Public).
   void Function()? onUnauthorized;
 
   Future<Map<String, dynamic>> get(String path, {Map<String, dynamic>? query}) => _send('GET', path, query: query);

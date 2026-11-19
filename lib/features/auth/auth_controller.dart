@@ -34,6 +34,9 @@ class AuthController extends AsyncNotifier<Person?> {
         return null;
       }
       final p = Person.fromJson(Map<String, dynamic>.from(u as Map));
+      // A renewed session comes with every app start, so people who use the app are never signed out.
+      final renewed = me['token'];
+      if (renewed is String && renewed.isNotEmpty) await ref.read(tokenStoreProvider).write(renewed);
       await prefs.setString(_userKey, jsonEncode(p.toJson()));
       return p;
     } on ApiException catch (e) {
@@ -54,28 +57,25 @@ class AuthController extends AsyncNotifier<Person?> {
     state = AsyncData(p);
   }
 
-  Future<void> login(String mob, String password) async =>
-      _accept(await ref.read(apiProvider).post('/auth/login', body: {'mob': mob, 'password': password}));
-
-  /// Returns a message when the account was created but still needs admin approval (the user is not signed in yet).
-  Future<String?> signup({
+  /// Asks for a Coordinator account (no password). Returns whether it is approved already, and a message to show.
+  Future<({bool approved, String message})> signup({
     required String mob,
-    required String password,
     required String name,
     String level = '',
     String gender = '',
-    String occupation = '',
   }) async {
-    final res = await ref
-        .read(apiProvider)
-        .post('/auth/signup', body: {'mob': mob, 'password': password, 'name': name, 'level': level, 'gender': gender, 'occupation': occupation});
-    if (res['pending'] == true) return res['message'] as String? ?? 'Your account is waiting for admin approval.';
-    await _accept(res);
-    return null;
+    final res = await ref.read(apiProvider).post('/auth/signup', body: {'mob': mob, 'name': name, 'level': level, 'gender': gender});
+    return (approved: res['approved'] == true, message: res['message'] as String? ?? '');
   }
 
-  Future<void> activate(String mob, String code, String password) async =>
-      _accept(await ref.read(apiProvider).post('/auth/activate', body: {'mob': mob, 'code': code, 'password': password}));
+  /// Sign in, step 1: texts a 6-digit code to the number. [appHash] lets Android read the SMS without asking.
+  /// Returns true when the SMS carries the app hash, so the app can read it with no prompt.
+  Future<bool> sendOtp(String mob, {String appHash = ''}) async =>
+      (await ref.read(apiProvider).post('/auth/otp/send', body: {'mob': mob, 'app_hash': appHash}))['auto_read'] == true;
+
+  /// Step 2: the right code signs the person in.
+  Future<void> verifyOtp(String mob, String otp) async =>
+      _accept(await ref.read(apiProvider).post('/auth/otp/verify', body: {'mob': mob, 'otp': otp}));
 
   Future<void> signOut() async {
     await ref.read(tokenStoreProvider).clear();

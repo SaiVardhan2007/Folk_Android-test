@@ -4,7 +4,7 @@
   "main": "src/index.ts",
   "compatibility_date": "2026-09-01",
   "compatibility_flags": ["nodejs_compat"],
-  // Non-secret settings. Secrets (ERPNEXT_API_KEY, ERPNEXT_API_SECRET, JWT_SECRET, WHATSAPP_API_KEY) are set with `wrangler secret put`.
+  // Non-secret settings. Secrets (ERPNEXT_API_KEY, ERPNEXT_API_SECRET, JWT_SECRET, WHATSAPP_API_KEY, MSG91_AUTH_KEY, MSG91_OTP_TEMPLATE_ID) are set with `wrangler secret put`.
   "vars": {
     "ERPNEXT_URL": "https://erp.hkmh.in",
     "MAIN_ADMIN_MOB": "9133318576",
@@ -12,7 +12,9 @@
     "WHATSAPP_PHONE_NUMBER_ID": "598435813347675",
     "WELCOME_VENUE": "Hare Krishna Heritage Tower",
     "WELCOME_MAP_LINK": "https://maps.app.goo.gl/qFhNCt7eRw2ez6mT8",
-    "DEFAULT_GUIDE_MOB": "9390927165"
+    "DEFAULT_GUIDE_MOB": "9390927165",
+    // Set to "1" only after MSG91_OTP_TEMPLATE_ID points to a DLT template that ends with ##hash## (see docs/RELEASING.md).
+    "OTP_SMS_HAS_APP_HASH": "0"
   },
   "keep_vars": true,
   // Brute-force protection for login/sign-up (per IP, shared across all Cloudflare locations).

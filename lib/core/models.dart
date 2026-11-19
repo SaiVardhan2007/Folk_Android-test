@@ -17,7 +17,6 @@ class Person {
     this.lastAttendedOn = '',
     this.registeredBy = '',
     this.joined = '',
-    this.hasPassword = true,
     this.venue = '',
     this.gmapLink = '',
     this.callNo = '',
@@ -31,21 +30,23 @@ class Person {
     this.chantingRounds = 0,
     this.feedback = '',
     this.comments = '',
-    this.notInterested = false,
   });
 
   final String id, mob, name, gender, level, occupation, profession, pgName, eventCode, tag, lastAttendedOn, registeredBy, joined;
   final String venue, gmapLink, callNo, fgName, fgMob, folkGuide;
   final String currentStay, skills, interests, feedback, comments;
-  final bool isActive, hasPassword, notInterested;
+  final bool isActive;
   final int attendanceCount, age, chantingRounds;
 
   bool get isAdmin => tag == 'Admin';
   bool get isCoordinator => tag == 'Coordinator';
   bool get isStaff => tag == 'Admin' || tag == 'Coordinator';
 
-  /// Signed up but not yet approved by an admin.
-  bool get isPending => !isActive && hasPassword;
+  /// A contact, not an app user. Only Public contacts are offered for calling.
+  bool get isContact => tag == 'Public' || tag == 'Not Interested';
+
+  /// Signed up in the app but not yet approved by an admin.
+  bool get isPending => !isActive && !isContact && registeredBy == 'self sign-up';
 
   factory Person.fromJson(Map<String, dynamic> j) => Person(
     id: j['id'] as String? ?? '',
@@ -63,7 +64,6 @@ class Person {
     lastAttendedOn: j['last_attended_on'] as String? ?? '',
     registeredBy: j['registered_by'] as String? ?? '',
     joined: j['joined'] as String? ?? '',
-    hasPassword: j['has_password'] as bool? ?? true,
     venue: j['venue'] as String? ?? '',
     gmapLink: j['gmap_link'] as String? ?? '',
     callNo: j['call_no'] as String? ?? '',
@@ -77,7 +77,6 @@ class Person {
     chantingRounds: (j['chanting_rounds'] as num?)?.toInt() ?? 0,
     feedback: j['feedback'] as String? ?? '',
     comments: j['comments'] as String? ?? '',
-    notInterested: j['not_interested'] as bool? ?? false,
   );
 
   Map<String, dynamic> toJson() => {
@@ -108,7 +107,6 @@ class Person {
     'chanting_rounds': chantingRounds,
     'feedback': feedback,
     'comments': comments,
-    'not_interested': notInterested,
   };
 }
 

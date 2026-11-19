@@ -1,3 +1,4 @@
+import 'package:flutter/foundation.dart' show kIsWeb;
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
@@ -325,8 +326,10 @@ class _ReceiptEditorState extends ConsumerState<_ReceiptEditor> {
           ),
           const SizedBox(height: kGapS),
           FilledButton.icon(onPressed: _busy ? null : _save, icon: const Icon(Icons.save_outlined), label: const Text('Save receipt format')),
-          const SizedBox(height: kGapS),
-          OutlinedButton.icon(onPressed: _busy ? null : _test, icon: const Icon(Icons.print_outlined), label: const Text('Print a test receipt')),
+          if (!kIsWeb) ...[ // thermal printers are reached over Bluetooth/USB, only in the Android app
+            const SizedBox(height: kGapS),
+            OutlinedButton.icon(onPressed: _busy ? null : _test, icon: const Icon(Icons.print_outlined), label: const Text('Print a test receipt')),
+          ],
         ],
       ),
     ),
@@ -408,7 +411,10 @@ class _UpdateEditorState extends ConsumerState<_UpdateEditor> {
               controller: _url,
               keyboardType: TextInputType.url,
               autocorrect: false,
-              decoration: const InputDecoration(labelText: 'Download link', helperText: 'https:// link to the Play Store page or the app file'),
+              decoration: const InputDecoration(
+                labelText: 'Download link',
+                helperText: 'Direct link to the .apk file (for example a GitHub release). Not a Google Drive link.',
+              ),
             ),
             const SizedBox(height: kGapM),
             TextField(

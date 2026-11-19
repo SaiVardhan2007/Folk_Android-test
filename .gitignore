@@ -47,3 +47,10 @@ app.*.map.json
 
 # Claude Code project notes (local only)
 CLAUDE.md
+
+# wrangler files
+.wrangler
+.dev.vars*
+!.dev.vars.example
+.env*
+!.env.example
