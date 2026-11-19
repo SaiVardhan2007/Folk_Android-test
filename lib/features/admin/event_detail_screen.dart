@@ -58,7 +58,9 @@ class EventDetailScreen extends ConsumerWidget {
                     value: registered,
                     color: context.colors.brand,
                     onTap: () => Navigator.of(context, rootNavigator: true).push(
-                      MaterialPageRoute<void>(builder: (_) => RegistrationsScreen(eventCode: eventCode, eventName: eventName)),
+                      MaterialPageRoute<void>(
+                        builder: (_) => RegistrationsScreen(eventCode: eventCode, eventName: eventName),
+                      ),
                     ),
                   ),
                   StatTile(label: 'Volunteers', value: n(s, 'volunteers'), color: context.colors.brand),
@@ -102,7 +104,9 @@ class EventDetailScreen extends ConsumerWidget {
                     value: n(s, 'feedback'),
                     color: context.colors.brand,
                     onTap: () => Navigator.of(context, rootNavigator: true).push(
-                      MaterialPageRoute<void>(builder: (_) => FeedbackScreen(eventCode: eventCode, eventName: eventName)),
+                      MaterialPageRoute<void>(
+                        builder: (_) => FeedbackScreen(eventCode: eventCode, eventName: eventName),
+                      ),
                     ),
                   ),
                   StatTile(label: 'Average (of 5)', value: avg == 0 ? '–' : avg.toStringAsFixed(1), color: context.colors.success),

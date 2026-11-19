@@ -44,7 +44,10 @@ class FieldGrid extends StatelessWidget {
   const FieldGrid({super.key, required this.children});
   final List<Widget> children;
   @override
-  Widget build(BuildContext context) => ResponsiveGrid(compact: 1, medium: 2, expanded: 2, spacing: kGapM + 2, children: children);
+  Widget build(BuildContext context) => children.length == 1
+      ? children
+            .first // a lone field takes the full row instead of half of it
+      : ResponsiveGrid(compact: 1, medium: 2, expanded: 2, spacing: kGapM + 2, children: children);
 }
 
 /// A number with a label ("12 Registered"). The single tile used for every statistic in the app.
@@ -418,7 +421,10 @@ class DetailSection extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    final shown = [for (final r in rows) if (r.$2.trim().isNotEmpty) r];
+    final shown = [
+      for (final r in rows)
+        if (r.$2.trim().isNotEmpty) r,
+    ];
     if (shown.isEmpty) return const SizedBox.shrink();
     final text = Theme.of(context).textTheme;
     return Padding(
@@ -442,7 +448,10 @@ class DetailSection extends StatelessWidget {
                 child: Row(
                   crossAxisAlignment: CrossAxisAlignment.start,
                   children: [
-                    SizedBox(width: 128, child: Text(r.$1, style: text.bodyMedium?.copyWith(color: Theme.of(context).hintColor))),
+                    SizedBox(
+                      width: 128,
+                      child: Text(r.$1, style: text.bodyMedium?.copyWith(color: Theme.of(context).hintColor)),
+                    ),
                     Expanded(child: SelectableText(r.$2, style: text.bodyLarge)),
                   ],
                 ),

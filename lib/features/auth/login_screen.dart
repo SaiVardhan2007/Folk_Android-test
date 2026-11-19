@@ -75,9 +75,7 @@ class _LoginScreenState extends ConsumerState<LoginScreen> {
   Future<void> _listen({required bool noPrompt}) async {
     if (!_android) return;
     final attempt = _attempt;
-    final res = noPrompt
-        ? await _sms.getSmsWithRetrieverApi(matcher: _codeMatcher)
-        : await _sms.getSmsWithUserConsentApi(matcher: _codeMatcher);
+    final res = noPrompt ? await _sms.getSmsWithRetrieverApi(matcher: _codeMatcher) : await _sms.getSmsWithUserConsentApi(matcher: _codeMatcher);
     final code = res.data?.code;
     if (!mounted || attempt != _attempt || code == null || code.length != 6) return;
     _code.text = code;
@@ -143,12 +141,9 @@ class _LoginScreenState extends ConsumerState<LoginScreen> {
     setState(() => _info = null);
     await _run(() async {
       if (_mode == _Mode.signUp) {
-        final res = await ref.read(authProvider.notifier).signup(
-          mob: normalizeMobile(_mob.text)!,
-          name: _name.text.trim(),
-          level: _level,
-          gender: _gender,
-        );
+        final res = await ref
+            .read(authProvider.notifier)
+            .signup(mob: normalizeMobile(_mob.text)!, name: _name.text.trim(), level: _level, gender: _gender);
         if (!mounted) return;
         setState(() {
           _info = res.message;
@@ -204,117 +199,165 @@ class _LoginScreenState extends ConsumerState<LoginScreen> {
         ? ('Create your account', 'Enter your name and mobile number. An admin approves new accounts, then you sign in with an SMS code.', 'Sign up')
         : ('Sign in', 'Enter your mobile number. We will send you a 6-digit code by SMS.', 'Send code');
 
+    // Laptops and tablets: brand panel on the left, the form on the right (fields never stretch across a wide screen).
+    final wide = context.windowClass == WindowClass.expanded;
+    final form = Form(
+      key: _form,
+      child: ListView(
+        shrinkWrap: wide, // lets Center place the form in the middle of its half
+        padding: EdgeInsets.symmetric(horizontal: wide ? kGapXL * 2 : kPagePadding, vertical: kGapXL),
+        keyboardDismissBehavior: ScrollViewKeyboardDismissBehavior.onDrag,
+        children: [
+          if (!wide) ...[
+            const Center(child: AppLogo(height: 110)),
+            const SizedBox(height: kGapXL),
+            Text('Hare Krishna', style: text.bodyLarge?.copyWith(color: scheme.onSurfaceVariant)),
+            const SizedBox(height: kGapL),
+          ],
+          if (!_codeStep) ...[
+            SegmentedButton<_Mode>(
+              showSelectedIcon: false,
+              segments: const [
+                ButtonSegment(value: _Mode.signIn, label: Text('Sign in')),
+                ButtonSegment(value: _Mode.signUp, label: Text('Sign up')),
+              ],
+              selected: {_mode},
+              onSelectionChanged: (s) => setState(() {
+                _mode = s.first;
+                _error = null;
+                _info = null;
+              }),
+            ),
+            const SizedBox(height: 20),
+          ],
+          Text(title, style: text.titleLarge),
+          Padding(
+            padding: const EdgeInsets.only(top: 6),
+            child: Text(hint, style: text.bodyMedium),
+          ),
+          const SizedBox(height: 16),
+          FieldGrid(
+            children: [
+              if (!_codeStep)
+                TextFormField(
+                  controller: _mob,
+                  keyboardType: TextInputType.phone,
+                  autofillHints: const [AutofillHints.telephoneNumberNational],
+                  inputFormatters: [FilteringTextInputFormatter.allow(RegExp(r'[0-9+ \-]')), LengthLimitingTextInputFormatter(15)],
+                  decoration: const InputDecoration(labelText: 'Mobile number', prefixIcon: Icon(Icons.phone_outlined), prefixText: '+91  '),
+                  validator: (v) => normalizeMobile(v ?? '') == null ? 'Enter a valid 10-digit mobile number' : null,
+                  onFieldSubmitted: (_) => _submit(),
+                ),
+              if (!_codeStep && signUp)
+                TextFormField(
+                  controller: _name,
+                  textCapitalization: TextCapitalization.words,
+                  autofillHints: const [AutofillHints.name],
+                  decoration: const InputDecoration(labelText: 'Your name', prefixIcon: Icon(Icons.person_outline)),
+                  validator: (v) => (v ?? '').trim().isEmpty ? 'Enter your name' : null,
+                ),
+              if (!_codeStep && signUp)
+                OptionDropdown(
+                  label: 'Level',
+                  value: _level,
+                  options: const ['Folk Foundation', 'Folk Prelims'],
+                  icon: Icons.school_outlined,
+                  onChanged: (v) => setState(() => _level = v),
+                ),
+              if (!_codeStep && signUp)
+                OptionDropdown(
+                  label: 'Gender',
+                  value: _gender,
+                  options: const ['M', 'F'],
+                  labelOf: (v) => v == 'M' ? 'Male' : 'Female',
+                  icon: Icons.wc_outlined,
+                  onChanged: (v) => setState(() => _gender = v),
+                ),
+              if (_codeStep)
+                TextFormField(
+                  controller: _code,
+                  autofocus: true,
+                  keyboardType: TextInputType.number,
+                  autofillHints: const [AutofillHints.oneTimeCode],
+                  inputFormatters: [FilteringTextInputFormatter.digitsOnly, LengthLimitingTextInputFormatter(6)],
+                  decoration: const InputDecoration(labelText: '6-digit code', prefixIcon: Icon(Icons.pin_outlined)),
+                  validator: (v) => (v ?? '').length == 6 ? null : 'Enter the 6-digit code',
+                  onChanged: (v) {
+                    if (v.length == 6) _verify();
+                  },
+                ),
+            ],
+          ),
+          if (_error != null) ...[const SizedBox(height: 14), StatusBanner(icon: Icons.error_outline, text: _error!, color: context.colors.danger)],
+          if (_info != null && !_codeStep) ...[
+            const SizedBox(height: 14),
+            StatusBanner(icon: Icons.hourglass_top_outlined, text: _info!, color: context.colors.success),
+          ],
+          const SizedBox(height: 20),
+          FilledButton(
+            onPressed: _busy ? null : _submit,
+            child: _busy ? const SizedBox(height: 24, width: 24, child: CircularProgressIndicator(strokeWidth: 3)) : Text(button),
+          ),
+          if (_codeStep) ...[
+            TextButton(
+              onPressed: _busy || _wait > 0 ? null : _resend,
+              child: Text(_wait > 0 ? 'Send the code again in $_wait s' : 'Send the code again'),
+            ),
+            TextButton(onPressed: _busy ? null : _changeNumber, child: const Text('Change mobile number')),
+          ],
+        ],
+      ),
+    );
+
     return PopScope(
       canPop: !_codeStep,
       onPopInvokedWithResult: (didPop, _) {
         if (!didPop) _changeNumber();
       },
       child: Scaffold(
-        body: SafeArea(
-          child: Form(
-            key: _form,
-            child: ListView(
-              padding: const EdgeInsets.fromLTRB(kPagePadding, 24, kPagePadding, 24),
-              keyboardDismissBehavior: ScrollViewKeyboardDismissBehavior.onDrag,
+        body: wide
+            ? Row(
+                crossAxisAlignment: CrossAxisAlignment.stretch,
+                children: [
+                  const Expanded(child: _BrandPanel()),
+                  Expanded(
+                    child: SafeArea(child: Center(child: form)),
+                  ),
+                ],
+              )
+            : SafeArea(child: form),
+      ),
+    );
+  }
+}
+
+/// The left half of the sign-in page on wide screens: the brand gradient with the logo and greeting.
+class _BrandPanel extends StatelessWidget {
+  const _BrandPanel();
+  @override
+  Widget build(BuildContext context) {
+    final text = Theme.of(context).textTheme;
+    return DecoratedBox(
+      decoration: const BoxDecoration(gradient: kBrandGradient),
+      child: SafeArea(
+        child: Center(
+          child: SingleChildScrollView(
+            padding: const EdgeInsets.all(kGapXL),
+            child: Column(
+              mainAxisSize: MainAxisSize.min,
               children: [
-                const Center(child: AppLogo(height: 110)),
-                const SizedBox(height: 24),
-                Text('Hare Krishna', style: text.bodyLarge?.copyWith(color: scheme.onSurfaceVariant)),
-                const SizedBox(height: 16),
-                if (!_codeStep) ...[
-                  SegmentedButton<_Mode>(
-                    showSelectedIcon: false,
-                    segments: const [
-                      ButtonSegment(value: _Mode.signIn, label: Text('Sign in')),
-                      ButtonSegment(value: _Mode.signUp, label: Text('Sign up')),
-                    ],
-                    selected: {_mode},
-                    onSelectionChanged: (s) => setState(() {
-                      _mode = s.first;
-                      _error = null;
-                      _info = null;
-                    }),
-                  ),
-                  const SizedBox(height: 20),
-                ],
-                Text(title, style: text.titleLarge),
-                Padding(
-                  padding: const EdgeInsets.only(top: 6),
-                  child: Text(hint, style: text.bodyMedium),
+                const AppLogo(height: 130),
+                const SizedBox(height: kGapXL),
+                Text(
+                  'Hare Krishna',
+                  style: text.headlineMedium?.copyWith(color: kOnBrand, fontWeight: FontWeight.w600),
                 ),
-                const SizedBox(height: 16),
-                FieldGrid(
-                  children: [
-                    if (!_codeStep)
-                      TextFormField(
-                        controller: _mob,
-                        keyboardType: TextInputType.phone,
-                        autofillHints: const [AutofillHints.telephoneNumberNational],
-                        inputFormatters: [FilteringTextInputFormatter.allow(RegExp(r'[0-9+ \-]')), LengthLimitingTextInputFormatter(15)],
-                        decoration: const InputDecoration(labelText: 'Mobile number', prefixIcon: Icon(Icons.phone_outlined), prefixText: '+91  '),
-                        validator: (v) => normalizeMobile(v ?? '') == null ? 'Enter a valid 10-digit mobile number' : null,
-                        onFieldSubmitted: (_) => _submit(),
-                      ),
-                    if (!_codeStep && signUp)
-                      TextFormField(
-                        controller: _name,
-                        textCapitalization: TextCapitalization.words,
-                        autofillHints: const [AutofillHints.name],
-                        decoration: const InputDecoration(labelText: 'Your name', prefixIcon: Icon(Icons.person_outline)),
-                        validator: (v) => (v ?? '').trim().isEmpty ? 'Enter your name' : null,
-                      ),
-                    if (!_codeStep && signUp)
-                      OptionDropdown(
-                        label: 'Level',
-                        value: _level,
-                        options: const ['Folk Foundation', 'Folk Prelims'],
-                        icon: Icons.school_outlined,
-                        onChanged: (v) => setState(() => _level = v),
-                      ),
-                    if (!_codeStep && signUp)
-                      OptionDropdown(
-                        label: 'Gender',
-                        value: _gender,
-                        options: const ['M', 'F'],
-                        labelOf: (v) => v == 'M' ? 'Male' : 'Female',
-                        icon: Icons.wc_outlined,
-                        onChanged: (v) => setState(() => _gender = v),
-                      ),
-                    if (_codeStep)
-                      TextFormField(
-                        controller: _code,
-                        autofocus: true,
-                        keyboardType: TextInputType.number,
-                        autofillHints: const [AutofillHints.oneTimeCode],
-                        inputFormatters: [FilteringTextInputFormatter.digitsOnly, LengthLimitingTextInputFormatter(6)],
-                        decoration: const InputDecoration(labelText: '6-digit code', prefixIcon: Icon(Icons.pin_outlined)),
-                        validator: (v) => (v ?? '').length == 6 ? null : 'Enter the 6-digit code',
-                        onChanged: (v) {
-                          if (v.length == 6) _verify();
-                        },
-                      ),
-                  ],
+                const SizedBox(height: kGapS),
+                Text(
+                  'FOLK Tracker: attendance, calls and follow-ups',
+                  textAlign: TextAlign.center,
+                  style: text.titleMedium?.copyWith(color: kOnBrand.withValues(alpha: 0.9)),
                 ),
-                if (_error != null) ...[
-                  const SizedBox(height: 14),
-                  StatusBanner(icon: Icons.error_outline, text: _error!, color: context.colors.danger),
-                ],
-                if (_info != null && !_codeStep) ...[
-                  const SizedBox(height: 14),
-                  StatusBanner(icon: Icons.hourglass_top_outlined, text: _info!, color: context.colors.success),
-                ],
-                const SizedBox(height: 20),
-                FilledButton(
-                  onPressed: _busy ? null : _submit,
-                  child: _busy ? const SizedBox(height: 24, width: 24, child: CircularProgressIndicator(strokeWidth: 3)) : Text(button),
-                ),
-                if (_codeStep) ...[
-                  TextButton(
-                    onPressed: _busy || _wait > 0 ? null : _resend,
-                    child: Text(_wait > 0 ? 'Send the code again in $_wait s' : 'Send the code again'),
-                  ),
-                  TextButton(onPressed: _busy ? null : _changeNumber, child: const Text('Change mobile number')),
-                ],
               ],
             ),
           ),

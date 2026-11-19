@@ -8,9 +8,13 @@ import '../../core/theme.dart';
 import '../../core/widgets.dart';
 import '../auth/auth_controller.dart';
 import 'admin_repo.dart';
+import 'assign_screen.dart';
 import '../../core/layout.dart';
 
-final _callersProvider = FutureProvider.autoDispose<List<Map<String, dynamic>>>((ref) => ref.read(adminRepoProvider).callers());
+/// Coordinators with their counts for the event being worked on.
+final _callersProvider = FutureProvider.autoDispose.family<List<Map<String, dynamic>>, String?>(
+  (ref, event) async => (await ref.read(adminRepoProvider).callers(event: event)).callers,
+);
 
 /// Which event or contact list the admin is working on in this tab (kept apart from the Home/Attendance event).
 class _CallTarget extends Notifier<String?> {
@@ -40,6 +44,16 @@ class CallsAdminTab extends ConsumerWidget {
   void _refresh(WidgetRef ref) {
     ref.invalidate(_callersProvider);
     ref.invalidate(_statsProvider);
+  }
+
+  Future<void> _openAssign(BuildContext context, WidgetRef ref, String event, Bootstrap? boot) async {
+    final name = boot?.eventsAndLists.where((e) => e.code == event).firstOrNull?.name ?? event;
+    final done = await Navigator.of(context, rootNavigator: true).push<bool>(
+      MaterialPageRoute(
+        builder: (_) => AssignScreen(event: event, eventName: name),
+      ),
+    );
+    if (done == true) _refresh(ref);
   }
 
   Future<void> _confirmRun(
@@ -81,7 +95,7 @@ class CallsAdminTab extends ConsumerWidget {
     final text = Theme.of(context).textTheme;
     final event = ref.watch(_callTargetProvider);
     final boot = ref.watch(bootstrapProvider).value;
-    final callers = ref.watch(_callersProvider);
+    final callers = ref.watch(_callersProvider(event));
     final repo = ref.read(adminRepoProvider);
 
     return PageBody(
@@ -108,37 +122,9 @@ class CallsAdminTab extends ConsumerWidget {
           runSpacing: 10,
           children: [
             FilledButton.icon(
-              onPressed: event == null
-                  ? null
-                  : () async {
-                      final done = await showModalBottomSheet<bool>(
-                        context: context,
-                        isScrollControlled: true,
-                        showDragHandle: true,
-                        builder: (c) => _AssignSheet(event: event, boot: boot, callers: callers.value ?? const []),
-                      );
-                      if (done == true) _refresh(ref);
-                    },
+              onPressed: event == null ? null : () => _openAssign(context, ref, event, boot),
               icon: const Icon(Icons.assignment_ind_outlined),
-              label: const Text('Assign contacts'),
-            ),
-            OutlinedButton.icon(
-              onPressed: event == null
-                  ? null
-                  : () => _confirmRun(
-                      context,
-                      ref,
-                      title: 'Hand out follow-ups?',
-                      button: 'Hand out',
-                      body:
-                          'Contacts marked "Need to Call Again" or "Available on Weekend" go to coordinators with Auto assign on, as follow-up calls.',
-                      run: () async {
-                        final r = await repo.followUp(event, const []);
-                        return '${r['moved']} follow-up call(s) handed out${(r['left'] as num) > 0 ? ', ${r['left']} had no coordinator with room' : ''}.';
-                      },
-                    ),
-              icon: const Icon(Icons.replay_outlined),
-              label: const Text('Follow-ups'),
+              label: const Text('Assign calls'),
             ),
             OutlinedButton.icon(
               onPressed: event == null
@@ -319,153 +305,6 @@ class CallsAdminTab extends ConsumerWidget {
     } on ApiException catch (e) {
       if (context.mounted) showMessage(context, e.message, error: true);
     }
-  }
-}
-
-class _AssignSheet extends ConsumerStatefulWidget {
-  const _AssignSheet({required this.event, required this.boot, required this.callers});
-  final String event;
-  final Bootstrap? boot;
-  final List<Map<String, dynamic>> callers;
-  @override
-  ConsumerState<_AssignSheet> createState() => _AssignSheetState();
-}
-
-class _AssignSheetState extends ConsumerState<_AssignSheet> {
-  String _level = '', _gender = '', _attended = '', _reg = '';
-  bool _busy = false;
-  late final Set<String> _picked = {
-    for (final c in widget.callers)
-      if (c['auto_assign'] == true) '${c['mob']}',
-  };
-  Map<String, dynamic>? _plan;
-
-  Map<String, dynamic> get _body => {
-    'event': widget.event,
-    'level': _level,
-    'gender': _gender,
-    'attended': _attended,
-    'reg_event': _reg,
-    'coordinators': _picked.toList(),
-  };
-
-  Future<void> _go({required bool preview}) async {
-    setState(() => _busy = true);
-    try {
-      final r = await ref.read(adminRepoProvider).assign(_body, preview: preview);
-      if (!mounted) return;
-      if (preview) {
-        setState(() => _plan = r);
-      } else {
-        showMessage(context, '${r['assignable']} contact(s) assigned.');
-        Navigator.pop(context, true);
-      }
-    } on ApiException catch (e) {
-      if (mounted) showMessage(context, e.message, error: true);
-    } finally {
-      if (mounted) setState(() => _busy = false);
-    }
-  }
-
-  @override
-  Widget build(BuildContext context) {
-    final text = Theme.of(context).textTheme;
-    final b = widget.boot;
-    void changed(VoidCallback f) => setState(() {
-      f();
-      _plan = null;
-    });
-    return SheetBody(
-      children: [
-        Text('Assign contacts', style: text.titleLarge),
-        const SizedBox(height: 4),
-        Text(
-          'Public contacts who match are shared between the chosen coordinators. Whoever has the fewest calls gets the next contact, and call limits are respected.',
-          style: text.bodyMedium,
-        ),
-        const SizedBox(height: 14),
-        FieldGrid(
-          children: [
-            OptionDropdown(
-              label: 'Registered for event',
-              value: _reg,
-              options: [for (final e in b?.eventsAndLists ?? <FolkEvent>[]) e.code],
-              labelOf: (c) => b!.eventsAndLists.firstWhere((e) => e.code == c).name,
-              onChanged: (v) => changed(() => _reg = v),
-            ),
-            OptionDropdown(label: 'Level', value: _level, options: b?.levels ?? const [], onChanged: (v) => changed(() => _level = v)),
-            OptionDropdown(
-              label: 'Gender',
-              value: _gender,
-              options: const ['M', 'F'],
-              labelOf: genderLabel,
-              onChanged: (v) => changed(() => _gender = v),
-            ),
-            OptionDropdown(
-              label: 'Attendance',
-              value: _attended,
-              options: const ['yes', 'no'],
-              labelOf: (v) => v == 'yes' ? 'Has attended' : 'Never attended',
-              onChanged: (v) => changed(() => _attended = v),
-            ),
-          ],
-        ),
-        Text(
-          'Assigning replaces the earlier contacts of the coordinators you pick. Their call history is kept.',
-          style: text.bodyMedium,
-        ),
-        const SizedBox(height: kGapS),
-        Text('Coordinators', style: text.titleSmall),
-        for (final c in widget.callers)
-          CheckboxListTile(
-            contentPadding: EdgeInsets.zero,
-            dense: true,
-            value: _picked.contains('${c['mob']}'),
-            onChanged: (v) => changed(() => v == true ? _picked.add('${c['mob']}') : _picked.remove('${c['mob']}')),
-            title: Text('${c['name']}'),
-            subtitle: Text('Has ${c['assigned']}${c['call_limit'] == null ? '' : '  •  limit ${c['call_limit']}'}'),
-          ),
-        if (_plan != null)
-          Card(
-            child: Padding(
-              padding: const EdgeInsets.all(12),
-              child: Column(
-                crossAxisAlignment: CrossAxisAlignment.start,
-                children: [
-                  Text('${_plan!['assignable']} of ${_plan!['pool']} matching contacts will be assigned', style: text.titleSmall),
-                  if (((_plan!['removed_previous'] as num?) ?? 0) > 0)
-                    Text('${_plan!['removed_previous']} earlier contact(s) of these coordinators will be removed', style: text.bodyMedium),
-                  if ((_plan!['already_assigned'] as num) > 0)
-                    Text('${_plan!['already_assigned']} already assigned for this event', style: text.bodyMedium),
-                  if ((_plan!['unassigned'] as num) > 0)
-                    Text(
-                      '${_plan!['unassigned']} will stay unassigned (call limits reached)',
-                      style: text.bodyMedium?.copyWith(color: context.colors.warning),
-                    ),
-                  const SizedBox(height: 6),
-                  for (final p in (_plan!['per_coordinator'] as List))
-                    Text('${p['name']}: +${p['add']} (total ${p['total_after']})', style: text.bodyMedium),
-                ],
-              ),
-            ),
-          ),
-        const SizedBox(height: 14),
-        Row(
-          children: [
-            Expanded(
-              child: OutlinedButton(onPressed: _busy ? null : () => _go(preview: true), child: const Text('Preview')),
-            ),
-            const SizedBox(width: 12),
-            Expanded(
-              child: FilledButton(
-                onPressed: _busy || _plan == null || (_plan!['assignable'] as num) == 0 ? null : () => _go(preview: false),
-                child: Text(_busy ? 'Working…' : 'Assign'),
-              ),
-            ),
-          ],
-        ),
-      ],
-    );
   }
 }
 

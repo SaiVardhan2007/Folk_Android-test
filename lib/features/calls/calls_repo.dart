@@ -1,6 +1,8 @@
+import 'dart:convert';
 import 'dart:math';
 
 import 'package:flutter_riverpod/flutter_riverpod.dart';
+import 'package:shared_preferences/shared_preferences.dart';
 import '../../core/cache.dart';
 
 import '../../core/api.dart';
@@ -83,6 +85,57 @@ class CallsRepo {
   static String newRef() {
     final r = Random.secure();
     return List.generate(20, (_) => r.nextInt(16).toRadixString(16)).join();
+  }
+}
+
+/// How long a half-finished call (called / messaged / status / note) is remembered on the phone before it is forgotten.
+const kCallDraftKeep = Duration(minutes: 30);
+
+/// What a coordinator has done on one call card but not submitted yet. Survives leaving the screen, switching apps or closing the app.
+class CallDraft {
+  const CallDraft({this.called = false, this.messaged = false, this.status = '', this.note = ''});
+  final bool called, messaged;
+  final String status, note;
+
+  static String _key(String id) => 'call_draft:$id';
+
+  /// The saved draft for assignment [id], or null when there is none or it is older than [kCallDraftKeep].
+  static Future<CallDraft?> load(String id) async {
+    try {
+      final p = await SharedPreferences.getInstance();
+      final raw = p.getString(_key(id));
+      if (raw == null) return null;
+      final j = Map<String, dynamic>.from(jsonDecode(raw) as Map);
+      final at = DateTime.fromMillisecondsSinceEpoch((j['at'] as num?)?.toInt() ?? 0);
+      if (DateTime.now().difference(at) > kCallDraftKeep) {
+        await p.remove(_key(id));
+        return null;
+      }
+      return CallDraft(
+        called: j['called'] == true,
+        messaged: j['messaged'] == true,
+        status: j['status'] as String? ?? '',
+        note: j['note'] as String? ?? '',
+      );
+    } catch (_) {
+      return null;
+    }
+  }
+
+  Future<void> save(String id) async {
+    try {
+      final p = await SharedPreferences.getInstance();
+      await p.setString(
+        _key(id),
+        jsonEncode({'called': called, 'messaged': messaged, 'status': status, 'note': note, 'at': DateTime.now().millisecondsSinceEpoch}),
+      );
+    } catch (_) {}
+  }
+
+  static Future<void> clear(String id) async {
+    try {
+      await (await SharedPreferences.getInstance()).remove(_key(id));
+    } catch (_) {}
   }
 }
 

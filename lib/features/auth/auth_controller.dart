@@ -58,12 +58,7 @@ class AuthController extends AsyncNotifier<Person?> {
   }
 
   /// Asks for a Coordinator account (no password). Returns whether it is approved already, and a message to show.
-  Future<({bool approved, String message})> signup({
-    required String mob,
-    required String name,
-    String level = '',
-    String gender = '',
-  }) async {
+  Future<({bool approved, String message})> signup({required String mob, required String name, String level = '', String gender = ''}) async {
     final res = await ref.read(apiProvider).post('/auth/signup', body: {'mob': mob, 'name': name, 'level': level, 'gender': gender});
     return (approved: res['approved'] == true, message: res['message'] as String? ?? '');
   }

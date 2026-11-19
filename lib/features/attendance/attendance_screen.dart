@@ -428,7 +428,8 @@ class _AttendanceScreenState extends ConsumerState<AttendanceScreen> with Widget
               label: Text(isNew ? 'Register & Mark Attendance' : 'Mark Attendance'),
               style: FilledButton.styleFrom(backgroundColor: context.colors.success),
             ),
-            if (!kIsWeb) ...[ // thermal printers are reached over Bluetooth/USB, only in the Android app
+            if (!kIsWeb) ...[
+              // thermal printers are reached over Bluetooth/USB, only in the Android app
               const SizedBox(height: kGapS),
               OutlinedButton.icon(
                 onPressed: _busyN.value ? null : () => _mark(isNew: isNew, print: true),

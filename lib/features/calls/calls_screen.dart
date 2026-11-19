@@ -142,6 +142,26 @@ class _CallCardState extends ConsumerState<_CallCard> {
   bool _called = false, _messaged = false, _busy = false;
   String _ref = CallsRepo.newRef();
 
+  @override
+  void initState() {
+    super.initState();
+    if (widget.item.isPending) _restore();
+  }
+
+  /// Picks up where the coordinator left off (they called, then left this screen or the app before submitting).
+  Future<void> _restore() async {
+    final dr = await CallDraft.load(item.id);
+    if (dr == null || !mounted) return;
+    setState(() {
+      _called = dr.called;
+      _messaged = dr.messaged;
+      if (_status.isEmpty && d.statuses.contains(dr.status)) _status = dr.status;
+      if (_note.isEmpty) _note = dr.note;
+    });
+  }
+
+  void _remember() => CallDraft(called: _called, messaged: _messaged, status: _status, note: _note).save(item.id);
+
   CallItem get item => widget.item;
   CallsData get d => widget.data;
   bool get _first => item.isPending;
@@ -161,6 +181,7 @@ class _CallCardState extends ConsumerState<_CallCard> {
 
   Future<void> _call() async {
     setState(() => _called = true);
+    _remember(); // kept even if they leave this screen or the app while on the call
     final ok = await FlutterPhoneDirectCaller.callNumber('+91${item.mob}');
     if (ok != true) await launchUrl(Uri.parse('tel:+91${item.mob}'));
   }
@@ -171,12 +192,13 @@ class _CallCardState extends ConsumerState<_CallCard> {
     final ok = await launchUrl(Uri.parse('https://wa.me/91${item.mob}?text=${Uri.encodeComponent(msg)}'), mode: LaunchMode.externalApplication);
     if (ok) {
       setState(() => _messaged = true);
+      _remember();
     } else if (mounted) {
       showMessage(context, 'Could not open WhatsApp.', error: true);
     }
   }
 
-  /// Asks for a note. Required for some statuses; the caller can't skip those.
+  /// Asks for a note. Required for some statuses (Cancel then undoes the status). Otherwise Cancel just means "no note" and the status stays.
   Future<String?> _askNote(String status, {required bool required}) {
     final c = TextEditingController(text: _note);
     return showDialog<String>(
@@ -194,7 +216,7 @@ class _CallCardState extends ConsumerState<_CallCard> {
             decoration: InputDecoration(hintText: required ? 'Write what happened (required for "$status")' : 'Optional'),
           ),
           actions: [
-            TextButton(onPressed: () => Navigator.pop(ctx, required ? null : _note), child: Text(required ? 'Cancel' : 'Skip')),
+            TextButton(onPressed: () => Navigator.pop(ctx), child: const Text('Cancel')),
             FilledButton(
               style: FilledButton.styleFrom(minimumSize: const Size(100, 48)),
               onPressed: required && c.text.trim().isEmpty ? null : () => Navigator.pop(ctx, c.text.trim()),
@@ -212,11 +234,12 @@ class _CallCardState extends ConsumerState<_CallCard> {
     setState(() => _status = v);
     final n = await _askNote(v, required: required);
     if (!mounted) return;
-    if (n == null) {
-      setState(() => _status = prev); // cancelled a required note: undo the choice
-    } else {
+    if (n != null) {
       setState(() => _note = n);
+    } else if (required) {
+      setState(() => _status = prev); // cancelled a required note: undo the choice
     }
+    _remember();
   }
 
   Future<void> _submit() async {
@@ -226,6 +249,7 @@ class _CallCardState extends ConsumerState<_CallCard> {
       HapticFeedback.mediumImpact();
       if (mounted) showMessage(context, 'Thanks for submitting 🙏');
       _ref = CallsRepo.newRef();
+      await CallDraft.clear(item.id);
       ref.invalidate(callsProvider);
     } on ApiException catch (e) {
       if (mounted) showMessage(context, e.isNetwork ? 'No internet. Tap Submit again when you are back online.' : e.message, error: true);
@@ -320,7 +344,10 @@ class _CallCardState extends ConsumerState<_CallCard> {
                           ? null
                           : () async {
                               final n = await _askNote(_status, required: d.noteRequired.contains(_status));
-                              if (n != null && mounted) setState(() => _note = n);
+                              if (n != null && mounted) {
+                                setState(() => _note = n);
+                                _remember();
+                              }
                             },
                     ),
                   ],

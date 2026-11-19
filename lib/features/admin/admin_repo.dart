@@ -31,15 +31,25 @@ class AdminRepo {
   Future<void> saveSettings(Map<String, dynamic> patch) => _api.put('/admin/settings', body: patch);
 
   // ---- calling (admin)
-  Future<List<Map<String, dynamic>>> callers() async =>
-      ((await _api.get('/admin/callers'))['callers'] as List).map((e) => Map<String, dynamic>.from(e as Map)).toList();
+  /// Active coordinators with their counts for [event] (all events when null), and the call statuses an admin can pick.
+  Future<({List<Map<String, dynamic>> callers, List<String> statuses})> callers({String? event}) async {
+    final r = await _api.get('/admin/callers', query: {'event': ?event});
+    return (
+      callers: ((r['callers'] as List?) ?? const []).map((e) => Map<String, dynamic>.from(e as Map)).toList(),
+      statuses: ((r['statuses'] as List?) ?? const []).map((e) => '$e').toList(),
+    );
+  }
+
   Future<void> setCaller(String mob, Map<String, dynamic> patch) => _api.patch('/admin/callers/$mob', body: patch);
-  Future<Map<String, dynamic>> assign(Map<String, dynamic> body, {required bool preview}) =>
-      _api.post(preview ? '/admin/assign/preview' : '/admin/assign', body: body);
+
+  // Assigning: plan first (writes nothing), then apply the plan in small batches that are safe to repeat.
+  Future<Map<String, dynamic>> planAssign(Map<String, dynamic> body) =>
+      _api.post('/admin/assign/plan', body: body, timeout: const Duration(seconds: 60));
+  Future<Map<String, dynamic>> applyAssign(Map<String, dynamic> body) =>
+      _api.post('/admin/assign/apply', body: body, timeout: const Duration(seconds: 90));
+  Future<void> finishAssign(Map<String, dynamic> body) => _api.post('/admin/assign/finish', body: body);
   Future<int> unassign(String event, {String? coordinatorMob}) async =>
       ((await _api.post('/admin/assign/unassign', body: {'event': event, 'coordinator': coordinatorMob}))['removed'] as num).toInt();
-  Future<Map<String, dynamic>> followUp(String event, List<String> coordinatorMobs) =>
-      _api.post('/admin/assign/followup', body: {'event': event, 'coordinators': coordinatorMobs});
   Future<Map<String, dynamic>> eventSummary(String code) => _api.get('/admin/events/${Uri.encodeComponent(code)}/summary');
   Future<Map<String, dynamic>> callStats(String event) => _api.get('/admin/calls/stats', query: {'event': event});
   Future<List<Map<String, dynamic>>> templates() async =>

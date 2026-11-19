@@ -9,7 +9,7 @@ import { sendOtpSms } from "./sms";
 import { attendanceAlert, defaultsOf, sendTemplate, welcomeMessage } from "./whatsapp";
 import { buildRows, guessMapping, IMPORT_FIELDS, ImportError, loadSheetCsv, MAX_IMPORT_BYTES, MAX_IMPORT_ROWS, parseCsv, type ImportField, type ImportRow, type Mapping } from "./importer";
 import { notFoundPage, pageHeaders, renderPage, type PageConfig } from "./publicPage";
-import { distribute, FOLLOW_UP, NOTE_REQUIRED, PENDING, POSITIVE, STATUSES, type Coord } from "./calls";
+import { distribute, FOLLOW_UP, NOTE_REQUIRED, PENDING, POSITIVE, shuffle, STATUSES, takeFairly, type Coord } from "./calls";
 import { CONTACT_TAGS, DEFAULT_TAGS, DONATIONS, NOT_INTERESTED, FEEDBACKS, GENDERS, LEVELS, OCCUPATIONS, STAYS, type Bindings, type Session, type Vars } from "./types";
 
 type Ctx = Context<{ Bindings: Bindings; Variables: Vars }>;
@@ -123,9 +123,8 @@ const ACTIVITY: [string, RegExp, string, ((b: Body, path: string) => string)?][]
   ["POST", /^\/admin\/events$/, "Added an event", (b) => str(b.name)],
   ["POST", /^\/admin\/events\/[^/]+\/current$/, "Changed the current event", (_b, path) => `now ${decodeURIComponent(path.split("/")[3] ?? "")}`],
   ["PUT", /^\/admin\/settings$/, "Changed settings", (b) => Object.keys(b).slice(0, 8).join(", ")],
-  ["POST", /^\/admin\/assign$/, "Assigned calls", (b) => `event ${str(b.event)}`],
+  ["POST", /^\/admin\/assign\/finish$/, "Assigned calls", (b) => `${str(b.scope)}: ${Number(b.assigned) || 0} contact(s), event ${str(b.event)}`],
   ["POST", /^\/admin\/assign\/unassign$/, "Removed unstarted call assignments", (b) => `event ${str(b.event)}`],
-  ["POST", /^\/admin\/assign\/followup$/, "Gave follow-up calls to coordinators", (b) => `event ${str(b.event)}`],
   ["PATCH", /^\/admin\/callers\/\d+$/, "Changed a caller's call settings"],
   ["POST", /^\/admin\/import\/commit$/, "Imported contacts"],
   ["PUT", /^\/admin\/import\/sources$/, "Changed import sources"],
@@ -151,9 +150,12 @@ async function activityLog(c: Ctx, next: () => Promise<void>) {
     c.executionCtx.waitUntil(erpOf(c).insert(ACT, doc).catch((e) => console.error("activity log", e)));
   } catch (e) { console.error("activity log", e); }
 }
-// The website (folk.hmh.in) calls this API from the browser. Bearer tokens only, no cookies, so no credentials mode.
-const WEB_ORIGINS = ["https://folk.hmh.in"];
-app.use("*", cors({ origin: WEB_ORIGINS, allowMethods: ["GET", "POST", "PUT", "PATCH", "DELETE"], allowHeaders: ["Authorization", "Content-Type"], maxAge: 86400 }));
+// The website calls this API from the browser. Bearer tokens only, no cookies, so no credentials mode.
+// Allowed: the real domain, the Cloudflare Pages address and its per-deploy previews, and local `flutter run -d chrome`.
+const WEB_ORIGINS = ["https://folk.hmh.in", "https://folk-web.pages.dev"];
+const WEB_ORIGIN_PATTERNS = [/^https:\/\/[a-z0-9-]+\.folk-web\.pages\.dev$/, /^http:\/\/(localhost|127\.0\.0\.1)(:\d+)?$/];
+const webOrigin = (o: string) => (WEB_ORIGINS.includes(o) || WEB_ORIGIN_PATTERNS.some((r) => r.test(o)) ? o : null);
+app.use("*", cors({ origin: webOrigin, allowMethods: ["GET", "POST", "PUT", "PATCH", "DELETE"], allowHeaders: ["Authorization", "Content-Type"], maxAge: 86400 }));
 app.use("*", activityLog);
 
 // ---------- admin-controlled settings (FOLK Settings, a single record)
@@ -938,9 +940,10 @@ app.get("/people/:mob/history", async (c) => {
 app.get("/admin/callers", async (c) => {
   needAdmin(c);
   const erp = erpOf(c);
+  const event = clean(c.req.query("event"), 60); // counts are for this event; without it, for all events
   const [people, counts] = await Promise.all([
     erp.list<Row & { call_limit?: number; auto_assign?: number }>(PERSON, ["name", "mob_no", "full_name", "call_limit", "auto_assign"], [["user_tag", "=", "Coordinator"], ["is_active", "=", 1]], { order_by: "full_name asc" }),
-    erp.list<{ coordinator: string; status: string; n: number }>(ASG, aggregate({ COUNT: "*", as: "n" }, "coordinator", "status"), [], { group_by: "coordinator, status" }),
+    erp.list<{ coordinator: string; status: string; n: number }>(ASG, aggregate({ COUNT: "*", as: "n" }, "coordinator", "status"), event ? [["event_code", "=", event]] : [], { group_by: "coordinator, status" }),
   ]);
   const by = new Map<string, { assigned: number; pending: number; positive: number }>();
   for (const r of counts) {
@@ -951,6 +954,7 @@ app.get("/admin/callers", async (c) => {
     by.set(r.coordinator, x);
   }
   return c.json({
+    statuses: STATUSES.filter((x) => x !== PENDING),
     callers: people.map((p) => ({ id: p.name, mob: p.mob_no, name: p.full_name, call_limit: p.call_limit || null, auto_assign: !!p.auto_assign, ...(by.get(p.name) ?? { assigned: 0, pending: 0, positive: 0 }) })),
   });
 });
@@ -974,16 +978,33 @@ app.patch("/admin/callers/:mob", async (c) => {
 });
 
 // ---------- admin: assigning contacts
-type AssignBody = { event: string; level: string; gender: string; attended: string; reg_event: string; mobs: string[]; coordinators: string[] };
+//
+// Three kinds of hand-out, all built the same way: (1) PLAN: the server works out exactly who gets which contact and returns it,
+// without writing anything; (2) APPLY: the app sends that plan back in small batches. Each batch is safe to repeat, so a dropped
+// connection never leaves a half-done mess: the app shows how far it got and carries on from there.
+//   new      contacts nobody has been assigned to yet (for this event)
+//   others   contacts not called yet, taken from other coordinators (for example to give a new coordinator a share)
+//   followup contacts whose last call had one of the chosen statuses (optionally within a date range), for another try
+type Scope = "new" | "others" | "followup";
+type AssignBody = {
+  event: string; scope: Scope; mode: "previous" | "random"; level: string; gender: string; attended: string; reg_event: string;
+  mobs: string[]; coordinators: string[]; from: string[]; statuses: string[]; date_from: string; date_to: string; limit: number;
+};
+const arr = (v: unknown, max = 5000) => (Array.isArray(v) ? v.map((x) => String(x)).slice(0, max) : []);
 function assignBody(b: Record<string, unknown>): AssignBody {
-  const arr = (v: unknown) => (Array.isArray(v) ? v.map((x) => String(x)).slice(0, 5000) : []);
+  const scope = (["new", "others", "followup"] as const).find((x) => x === b.scope);
+  if (!scope) throw bad("Choose what you want to assign.");
+  const date = (v: unknown) => (DATE_RE.test(String(v ?? "")) ? String(v) : "");
+  const limit = Math.floor(Number(b.limit));
   return {
-    event: clean(b.event, 60), level: pick(b.level, LEVELS), gender: pick(b.gender, GENDERS), attended: clean(b.attended, 5), reg_event: clean(b.reg_event, 60),
-    mobs: arr(b.mobs).map((m) => normalizeMobile(m) ?? "").filter(Boolean), coordinators: arr(b.coordinators),
+    event: clean(b.event, 60), scope, mode: b.mode === "previous" ? "previous" : "random",
+    level: pick(b.level, LEVELS), gender: pick(b.gender, GENDERS), attended: clean(b.attended, 5), reg_event: clean(b.reg_event, 60),
+    mobs: arr(b.mobs).map((m) => normalizeMobile(m) ?? "").filter(Boolean), coordinators: arr(b.coordinators, 200), from: arr(b.from, 200),
+    statuses: arr(b.statuses, 20).filter((x) => (STATUSES as readonly string[]).includes(x) && x !== PENDING),
+    date_from: date(b.date_from), date_to: date(b.date_to), limit: Number.isFinite(limit) && limit > 0 ? Math.min(limit, 5000) : 0,
   };
 }
 
-/** Works out who would get which contact. With `commit` it also writes the assignments. */
 /**
  * Updates many records with one ERPNext call per 200 rows. Updating them one by one would hit Cloudflare's
  * limit on outgoing requests per invocation (50) as soon as an assignment moves more than a few dozen contacts.
@@ -997,11 +1018,17 @@ async function bulkUpdate(erp: Erp, doctype: string, rows: ({ name: string } & R
   }
 }
 
-async function planAssign(c: Ctx, a: AssignBody, commit: boolean) {
+type Coordinator = Row & { call_limit?: number; auto_assign?: number };
+const COORD_FIELDS = ["name", "mob_no", "full_name", "call_limit", "auto_assign"];
+
+/** Works out who gets which contact. Writes nothing. */
+async function planAssign(c: Ctx, a: AssignBody) {
   if (!a.event) throw bad("Choose the event these calls are for.");
+  if (a.scope === "followup" && !a.statuses.length) throw bad("Choose at least one call status.");
+  if (a.date_from && a.date_to && a.date_from > a.date_to) throw bad("The 'from' date is after the 'to' date.");
   const erp = erpOf(c);
-  // Pool: Public contacts only, matching the filters. Staff and "Not Interested" contacts are never called.
-  const f: Filters = [["user_tag", "=", "Public"], ["is_active", "=", 1]];
+  const needPool = a.scope === "new";
+  const f: Filters = [["user_tag", "=", "Public"], ["is_active", "=", 1]]; // staff and "Not Interested" contacts are never called
   if (a.level) f.push(["level", "=", a.level]);
   if (a.gender) f.push(["gender", "=", a.gender]);
   if (a.reg_event) f.push(["event_code", "=", a.reg_event]);
@@ -1009,56 +1036,138 @@ async function planAssign(c: Ctx, a: AssignBody, commit: boolean) {
   if (a.attended === "no") f.push(["attendance_count", "=", 0]);
   if (a.mobs.length) f.push(["mob_no", "in", a.mobs]);
   const [pool, existing, coords] = await Promise.all([
-    erp.list<{ name: string; mob_no: string }>(PERSON, ["name", "mob_no"], f, { limit_page_length: 5000, order_by: "creation asc" }),
+    needPool ? erp.list<{ name: string }>(PERSON, ["name"], f, { limit_page_length: 5000, order_by: "creation asc" }) : Promise.resolve([]),
     erp.list<Asg>(ASG, ASG_FIELDS, [["event_code", "=", a.event]], { limit_page_length: 0 }),
-    erp.list<Row & { call_limit?: number; auto_assign?: number }>(PERSON, ["name", "mob_no", "full_name", "call_limit", "auto_assign"], [["user_tag", "=", "Coordinator"], ["is_active", "=", 1]]),
+    erp.list<Coordinator>(PERSON, COORD_FIELDS, [["user_tag", "=", "Coordinator"], ["is_active", "=", 1]]),
   ]);
-  const have = new Map(existing.map((e) => [e.person, e]));
   const chosen = a.coordinators.length ? coords.filter((p) => a.coordinators.includes(p.mob_no)) : coords.filter((p) => p.auto_assign);
-  if (!chosen.length) throw bad("No coordinators are available. Turn on Auto assign for at least one coordinator.");
-
-  // A new assignment REPLACES what the chosen coordinators had for this event (any status). Their call history (Call Log) is kept.
+  if (!chosen.length) throw bad("Choose at least one coordinator to give the calls to.");
   const chosenIds = new Set(chosen.map((p) => p.name));
-  const mine = existing.filter((e) => chosenIds.has(e.coordinator));
-  const takeBack = new Set(mine.map((e) => e.person));
-  const todo = pool.filter((p) => !have.has(p.name) || takeBack.has(p.name));
-  const load = new Map<string, number>();
-  for (const e of existing) if (!takeBack.has(e.person)) load.set(e.coordinator, (load.get(e.coordinator) ?? 0) + 1);
-  const cs: Coord[] = chosen.map((p) => ({ id: p.name, name: p.full_name, load: load.get(p.name) ?? 0, cap: p.call_limit || Infinity }));
-  const { given, left, added } = distribute(todo, cs);
-  const givenPeople = new Set(given.map((g) => g.item.name));
-  const dropped = mine.filter((e) => !givenPeople.has(e.person)); // earlier assignments that do not carry over: removed
-  const summary = {
-    removed_previous: dropped.length,
-    pool: pool.length, already_assigned: pool.length - todo.length, assignable: given.length, unassigned: left.length,
-    per_coordinator: cs.map((x) => ({ id: x.id, name: x.name, add: added.get(x.id) ?? 0, total_after: x.load + (added.get(x.id) ?? 0) })),
-  };
-  if (!commit || !given.length) return summary;
+  const fromIds = new Set(coords.filter((p) => a.from.includes(p.mob_no)).map((p) => p.name));
+  const nameOf = new Map(coords.map((p) => [p.name, p.full_name]));
+  const have = new Map(existing.map((e) => [e.person, e]));
 
+  // The contacts to hand out.
+  let items: { person: string; row?: Asg }[];
+  let allow: string[] = []; // statuses of an existing assignment that may be overwritten (stops a call made in the meantime from being lost)
+  if (a.scope === "new") {
+    items = pool.filter((p) => !have.has(p.name)).map((p) => ({ person: p.name }));
+  } else if (a.scope === "others") {
+    allow = [PENDING];
+    // Only calls nobody has started, and never from the coordinators who are receiving.
+    const rows = existing.filter((e) => e.status === PENDING && !chosenIds.has(e.coordinator) && (!fromIds.size || fromIds.has(e.coordinator)));
+    if (a.limit && rows.length > a.limit) {
+      const by = new Map<string, Asg[]>();
+      for (const r of rows) by.set(r.coordinator, [...(by.get(r.coordinator) ?? []), r]);
+      items = takeFairly(by, a.limit).map((r) => ({ person: r.person, row: r }));
+    } else items = rows.map((r) => ({ person: r.person, row: r }));
+  } else {
+    allow = a.statuses;
+    const rows = existing.filter((e) => {
+      if (!a.statuses.includes(e.status)) return false;
+      if (fromIds.size && !fromIds.has(e.coordinator)) return false;
+      const day = (e.submitted_at ?? "").slice(0, 10);
+      if ((a.date_from || a.date_to) && !day) return false;
+      return (!a.date_from || day >= a.date_from) && (!a.date_to || day <= a.date_to);
+    });
+    items = rows.map((r) => ({ person: r.person, row: r }));
+  }
+  const candidates = items.length;
+  if (a.scope !== "others" && a.limit && items.length > a.limit) items = items.slice(0, a.limit);
+
+  // Who had them before (only needed for "same coordinator as before").
+  const before = new Map<string, string>();
+  if (a.mode === "previous" && a.scope !== "others") {
+    if (a.scope === "followup") for (const i of items) before.set(i.person, i.row!.coordinator);
+    else {
+      const [earlier, logs] = await Promise.all([
+        erp.list<{ person: string; coordinator: string }>(ASG, ["person", "coordinator"], [["event_code", "!=", a.event]], { order_by: "assigned_at asc", limit_page_length: 0 }),
+        erp.list<{ person: string; coordinator: string }>(LOG, ["person", "coordinator"], [["coordinator", "!=", ""]], { order_by: "called_at asc", limit_page_length: 0 }),
+      ]);
+      for (const r of logs) before.set(r.person, r.coordinator); // oldest first, so the newest wins
+      for (const r of earlier) before.set(r.person, r.coordinator); // an earlier assignment counts more than a single call
+    }
+  }
+
+  const moving = new Set(items.map((i) => i.person));
+  const load = new Map<string, number>();
+  for (const e of existing) if (!moving.has(e.person)) load.set(e.coordinator, (load.get(e.coordinator) ?? 0) + 1);
+  const cs: Coord[] = shuffle(chosen).map((p) => ({ id: p.name, name: p.full_name, load: load.get(p.name) ?? 0, cap: p.call_limit || Infinity }));
+  const { given, left, added, kept } = distribute(shuffle(items), cs, (i) => before.get(i.person));
+
+  const groups = new Map<string, string[]>();
+  for (const g of given) groups.set(g.coordinator, [...(groups.get(g.coordinator) ?? []), g.item.person]);
+  const taken = new Map<string, number>();
+  for (const g of given) if (g.item.row) taken.set(g.item.row.coordinator, (taken.get(g.item.row.coordinator) ?? 0) + 1);
+  return {
+    scope: a.scope, event: a.event, follow_up: a.scope === "followup", allow,
+    candidates, assignable: given.length, unassigned: left.length, kept_with_previous: kept, shared_out: given.length - kept,
+    per_coordinator: cs.map((x) => ({ id: x.id, name: x.name, add: added.get(x.id) ?? 0, total_after: x.load + (added.get(x.id) ?? 0), limit: Number.isFinite(x.cap) ? x.cap : null })),
+    taken_from: [...taken].map(([id, n]) => ({ name: nameOf.get(id) ?? "Earlier system (imported)", count: n })).sort((x, y) => y.count - x.count),
+    moves: [...groups].map(([coordinator, persons]) => ({ coordinator, persons })),
+  };
+}
+
+app.post("/admin/assign/plan", async (c) => { needAdmin(c); return c.json(await planAssign(c, assignBody(await body(c)))); });
+
+/**
+ * Writes one batch of a plan (at most 100 contacts). Safe to repeat: contacts that already have a call row are updated, the rest
+ * are created, and a row whose call was made since the plan was drawn up is left alone and counted as `skipped`.
+ */
+app.post("/admin/assign/apply", async (c) => {
+  needAdmin(c);
+  const b = await body(c);
+  const event = clean(b.event, 60);
+  if (!event) throw bad("Choose an event.");
+  const follow = b.follow_up === true;
+  const allow = arr(b.allow, 20).filter((x) => (STATUSES as readonly string[]).includes(x));
+  const pairs: { person: string; coordinator: string }[] = [];
+  for (const m of Array.isArray(b.moves) ? (b.moves as Record<string, unknown>[]).slice(0, 100) : [])
+    for (const p of arr(m.persons, 100)) pairs.push({ person: p, coordinator: String(m.coordinator ?? "") });
+  if (!pairs.length) return c.json({ applied: 0, skipped: 0 });
+  if (pairs.length > 100) throw bad("Send at most 100 contacts at a time.");
+
+  const erp = erpOf(c);
+  const ids = [...new Set(pairs.map((p) => p.person))];
+  const [coords, people, rows] = await Promise.all([
+    erp.list<{ name: string }>(PERSON, ["name"], [["name", "in", [...new Set(pairs.map((p) => p.coordinator))]], ["user_tag", "=", "Coordinator"], ["is_active", "=", 1]]),
+    erp.list<{ name: string }>(PERSON, ["name"], [["name", "in", ids], ["user_tag", "=", "Public"], ["is_active", "=", 1]]),
+    erp.list<Asg>(ASG, ASG_FIELDS, [["event_code", "=", event], ["person", "in", ids]], { limit_page_length: 0 }),
+  ]);
+  const okCoord = new Set(coords.map((x) => x.name));
+  const okPerson = new Set(people.map((x) => x.name));
+  const have = new Map(rows.map((r) => [r.person, r]));
   const now = istNow();
-  const fresh = given.filter((g) => !have.has(g.item.name));
-  const moved = given.filter((g) => have.has(g.item.name));
-  for (const part of chunk(fresh, 100)) {
-    const docs = part.map((g) => ({ doctype: ASG, person: g.item.name, coordinator: g.coordinator, event_code: a.event, status: PENDING, is_follow_up: 0, assigned_at: now }));
-    try { await erp.call("POST", "/api/method/frappe.client.insert_many", { docs }); }
+  const fresh: Record<string, unknown>[] = [];
+  const update: ({ name: string } & Record<string, unknown>)[] = [];
+  let skipped = 0;
+  const added = new Map<string, number>();
+  for (const p of pairs) {
+    if (!okCoord.has(p.coordinator) || !okPerson.has(p.person)) { skipped++; continue; }
+    const row = have.get(p.person);
+    if (!row) fresh.push({ doctype: ASG, person: p.person, coordinator: p.coordinator, event_code: event, status: PENDING, is_follow_up: follow ? 1 : 0, assigned_at: now });
+    else if (allow.includes(row.status || PENDING)) update.push({ name: row.name, coordinator: p.coordinator, status: PENDING, assigned_at: now, ...(follow && { is_follow_up: 1 }) });
+    else { skipped++; continue; }
+    added.set(p.coordinator, (added.get(p.coordinator) ?? 0) + 1);
+  }
+  if (fresh.length) {
+    try { await erp.call("POST", "/api/method/frappe.client.insert_many", { docs: fresh }); }
     catch (e) {
-      // A concurrent assign may have created some of these already: drop those and insert the rest in one more call.
+      // A repeat (or a second admin) may have created some of these already: keep those, insert the rest.
       if (!isDuplicate(e)) throw e;
-      const taken = new Set((await erp.list<{ person: string }>(ASG, ["person"], [["event_code", "=", a.event], ["person", "in", docs.map((d) => d.person)]], { limit_page_length: 0 })).map((x) => x.person));
-      const rest = docs.filter((d) => !taken.has(d.person));
+      const taken = new Set((await erp.list<{ person: string }>(ASG, ["person"], [["event_code", "=", event], ["person", "in", fresh.map((d) => String(d.person))]], { limit_page_length: 0 })).map((x) => x.person));
+      const rest = fresh.filter((d) => !taken.has(String(d.person)));
+      skipped += fresh.length - rest.length;
       if (rest.length) await erp.call("POST", "/api/method/frappe.client.insert_many", { docs: rest });
     }
   }
-  for (const part of chunk(dropped.map((e) => e.name), 100)) {
-    await erp.call("POST", "/api/method/frappe.desk.reportview.delete_items", { items: JSON.stringify(part), doctype: ASG });
-  }
-  await bulkUpdate(erp, ASG, moved.map((g) => ({ name: have.get(g.item.name)!.name, coordinator: g.coordinator, status: PENDING, note: "", is_follow_up: 0, assigned_at: now })));
+  await bulkUpdate(erp, ASG, update);
   c.executionCtx.waitUntil(notifyAssigned(c, added).catch((e) => console.error("notifyAssigned", e)));
-  return summary;
-}
+  return c.json({ applied: fresh.length + update.length, skipped });
+});
 
-app.post("/admin/assign/preview", async (c) => { needAdmin(c); return c.json(await planAssign(c, assignBody(await body(c)), false)); });
-app.post("/admin/assign", async (c) => { needAdmin(c); return c.json(await planAssign(c, assignBody(await body(c)), true)); });
+/** Called once by the app when a whole plan has been applied, so the activity log gets one line instead of one per batch. */
+app.post("/admin/assign/finish", (c) => { needAdmin(c); return c.json({ ok: true }); });
 
 /** Removes assignments nobody has called yet (optionally only one coordinator's). Contacts and call history are untouched. */
 app.post("/admin/assign/unassign", async (c) => {
@@ -1075,29 +1184,6 @@ app.post("/admin/assign/unassign", async (c) => {
     await erp.call("POST", "/api/method/frappe.desk.reportview.delete_items", { items: JSON.stringify(part), doctype: ASG });
   }
   return c.json({ removed: rows.length });
-});
-
-/** Gives unsuccessful calls (Need to Call Again / Available on Weekend) to other coordinators for a second try. */
-app.post("/admin/assign/followup", async (c) => {
-  needAdmin(c);
-  const b = await body(c);
-  const event = clean(b.event, 60);
-  const wanted = Array.isArray(b.coordinators) ? b.coordinators.map(String) : [];
-  const erp = erpOf(c);
-  const [rows, coords, all] = await Promise.all([
-    erp.list<Asg>(ASG, ASG_FIELDS, [["event_code", "=", event], ["status", "in", [...FOLLOW_UP]]], { limit_page_length: 2000 }),
-    erp.list<Row & { call_limit?: number; auto_assign?: number }>(PERSON, ["name", "mob_no", "full_name", "call_limit", "auto_assign"], [["user_tag", "=", "Coordinator"], ["is_active", "=", 1]]),
-    erp.list<{ coordinator: string; n: number }>(ASG, aggregate({ COUNT: "*", as: "n" }, "coordinator"), [["event_code", "=", event]], { group_by: "coordinator" }),
-  ]);
-  const chosen = wanted.length ? coords.filter((p) => wanted.includes(p.mob_no)) : coords.filter((p) => p.auto_assign);
-  if (!event || !chosen.length) throw bad("Choose an event and at least one coordinator.");
-  const load = new Map(all.map((x) => [x.coordinator, x.n]));
-  const cs: Coord[] = chosen.map((p) => ({ id: p.name, name: p.full_name, load: load.get(p.name) ?? 0, cap: p.call_limit || Infinity }));
-  const { given, left, added } = distribute(rows, cs);
-  const now = istNow();
-  await bulkUpdate(erp, ASG, given.map((g) => ({ name: g.item.name, coordinator: g.coordinator, status: PENDING, is_follow_up: 1, assigned_at: now })));
-  c.executionCtx.waitUntil(notifyAssigned(c, added).catch((e) => console.error("notifyAssigned", e)));
-  return c.json({ moved: given.length, left: left.length, candidates: rows.length });
 });
 
 app.get("/admin/calls/stats", async (c) => {

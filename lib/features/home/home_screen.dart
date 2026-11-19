@@ -207,7 +207,12 @@ class _CallsSheet extends StatelessWidget {
               if (rows.isEmpty)
                 Padding(
                   padding: const EdgeInsets.all(24),
-                  child: Center(child: Text(cameOnly ? 'None of the people you called have come yet.' : 'You have not made any calls for this event yet.', style: text.bodyLarge)),
+                  child: Center(
+                    child: Text(
+                      cameOnly ? 'None of the people you called have come yet.' : 'You have not made any calls for this event yet.',
+                      style: text.bodyLarge,
+                    ),
+                  ),
                 )
               else
                 Flexible(
@@ -217,15 +222,22 @@ class _CallsSheet extends StatelessWidget {
                       for (final r in rows)
                         ListTile(
                           contentPadding: EdgeInsets.zero,
-                          leading: Icon(r['came'] == true ? Icons.check_circle : Icons.phone_in_talk_outlined, color: r['came'] == true ? context.colors.success : null),
+                          leading: Icon(
+                            r['came'] == true ? Icons.check_circle : Icons.phone_in_talk_outlined,
+                            color: r['came'] == true ? context.colors.success : null,
+                          ),
                           title: Text('${r['name'] ?? ''}'.isEmpty ? '${r['mob']}' : '${r['name']}'),
-                          subtitle: Text([
-                            '${r['mob']}',
-                            if (!cameOnly) '${r['status']}${'${r['called_at']}'.isEmpty ? '' : ' • ${shortTime('${r['called_at']}')}'}',
-                            if (cameOnly && '${r['came_at']}'.isNotEmpty) 'Came ${shortTime('${r['came_at']}')}',
-                          ].join('\n')),
+                          subtitle: Text(
+                            [
+                              '${r['mob']}',
+                              if (!cameOnly) '${r['status']}${'${r['called_at']}'.isEmpty ? '' : ' • ${shortTime('${r['called_at']}')}'}',
+                              if (cameOnly && '${r['came_at']}'.isNotEmpty) 'Came ${shortTime('${r['came_at']}')}',
+                            ].join('\n'),
+                          ),
                           isThreeLine: true,
-                          trailing: !cameOnly && r['came'] == true ? Text('Came', style: text.labelLarge?.copyWith(color: context.colors.success)) : null,
+                          trailing: !cameOnly && r['came'] == true
+                              ? Text('Came', style: text.labelLarge?.copyWith(color: context.colors.success))
+                              : null,
                         ),
                     ],
                   ),

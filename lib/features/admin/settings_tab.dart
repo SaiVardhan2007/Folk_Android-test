@@ -326,7 +326,8 @@ class _ReceiptEditorState extends ConsumerState<_ReceiptEditor> {
           ),
           const SizedBox(height: kGapS),
           FilledButton.icon(onPressed: _busy ? null : _save, icon: const Icon(Icons.save_outlined), label: const Text('Save receipt format')),
-          if (!kIsWeb) ...[ // thermal printers are reached over Bluetooth/USB, only in the Android app
+          if (!kIsWeb) ...[
+            // thermal printers are reached over Bluetooth/USB, only in the Android app
             const SizedBox(height: kGapS),
             OutlinedButton.icon(onPressed: _busy ? null : _test, icon: const Icon(Icons.print_outlined), label: const Text('Print a test receipt')),
           ],
