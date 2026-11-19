@@ -17,6 +17,7 @@ const _home = _Dest('/', 'Home', Icons.home_outlined, Icons.home_rounded);
 const _attendance = _Dest('/attendance', 'Attendance', Icons.how_to_reg_outlined, Icons.how_to_reg_rounded);
 const _register = _Dest('/register', 'Register', Icons.person_add_alt_1_outlined, Icons.person_add_alt_1_rounded);
 const _calls = _Dest('/calls', 'Calls', Icons.phone_in_talk_outlined, Icons.phone_in_talk_rounded);
+const _people = _Dest('/people', 'People', Icons.groups_outlined, Icons.groups_rounded);
 const _admin = _Dest('/admin', 'Admin', Icons.admin_panel_settings_outlined, Icons.admin_panel_settings_rounded);
 
 /// App frame: bottom bar on phones, side rail on tablets and wide windows. Content always fills the remaining width.
@@ -28,7 +29,7 @@ class AppShell extends ConsumerWidget {
   @override
   Widget build(BuildContext context, WidgetRef ref) {
     final me = ref.watch(authProvider).value;
-    final dests = [_home, _attendance, _register, if (me?.isCoordinator ?? false) _calls, if (me?.isAdmin ?? false) _admin];
+    final dests = [_home, _attendance, _register, if (me?.isCoordinator ?? false) _calls, if (me?.isAdmin ?? false) _people, if (me?.isAdmin ?? false) _admin];
     var index = dests.lastIndexWhere((d) => d.route == '/' ? location == '/' : location.startsWith(d.route));
     if (index < 0) index = 0;
     final title = dests[index].label;

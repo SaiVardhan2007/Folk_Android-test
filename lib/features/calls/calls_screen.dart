@@ -262,7 +262,7 @@ class _CallCardState extends ConsumerState<_CallCard> {
     context: context,
     isScrollControlled: true,
     showDragHandle: true,
-    builder: (c) => _HistorySheet(mob: item.mob, name: item.name, calls: calls),
+    builder: (c) => HistorySheet(mob: item.mob, name: item.name, calls: calls),
   );
 
   @override
@@ -373,8 +373,8 @@ class _CallCardState extends ConsumerState<_CallCard> {
   }
 }
 
-class _HistorySheet extends ConsumerWidget {
-  const _HistorySheet({required this.mob, required this.name, required this.calls});
+class HistorySheet extends ConsumerWidget {
+  const HistorySheet({super.key, required this.mob, required this.name, required this.calls});
   final String mob, name;
   final bool calls;
 

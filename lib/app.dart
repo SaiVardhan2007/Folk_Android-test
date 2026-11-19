@@ -6,6 +6,7 @@ import 'core/app_update.dart';
 import 'core/config.dart';
 import 'core/theme.dart';
 import 'features/admin/admin_screen.dart';
+import 'features/people/people_screen.dart';
 import 'features/attendance/attendance_screen.dart';
 import 'features/auth/auth_controller.dart';
 import 'features/auth/login_screen.dart';
@@ -36,7 +37,7 @@ final routerProvider = Provider<GoRouter>((ref) {
       final onLogin = state.matchedLocation == '/login';
       if (!signedIn) return onLogin ? null : '/login';
       if (onLogin) return '/';
-      if (state.matchedLocation.startsWith('/admin') && !(auth.value?.isAdmin ?? false)) return '/';
+      if ((state.matchedLocation.startsWith('/admin') || state.matchedLocation.startsWith('/people')) && !(auth.value?.isAdmin ?? false)) return '/';
       return null;
     },
     routes: [
@@ -59,6 +60,10 @@ final routerProvider = Provider<GoRouter>((ref) {
           GoRoute(
             path: '/calls',
             pageBuilder: (c, s) => const NoTransitionPage(child: CallsScreen()),
+          ),
+          GoRoute(
+            path: '/people',
+            pageBuilder: (c, s) => const NoTransitionPage(child: PeopleScreen()),
           ),
           GoRoute(
             path: '/admin',

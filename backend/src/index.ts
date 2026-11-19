@@ -49,6 +49,13 @@ const pick = <T extends string>(v: unknown, allowed: readonly T[]): T | "" => (a
 /** Asia/Kolkata wall-clock time as "YYYY-MM-DD HH:mm:ss" (what ERPNext stores). */
 const istNow = () => new Date(Date.now() + 5.5 * 3600_000).toISOString().replace("T", " ").slice(0, 19);
 const istToday = () => istNow().slice(0, 10);
+/** Monday and Sunday (YYYY-MM-DD) of the current India-time week. Weekly events (the Saturday Satsang) count calls inside this window. */
+function istWeek() {
+  const d = new Date(Date.now() + 5.5 * 3600_000);
+  const sinceMonday = (d.getUTCDay() + 6) % 7;
+  const day = (offset: number) => new Date(d.getTime() + offset * 86400_000).toISOString().slice(0, 10);
+  return { from: day(-sinceMonday), to: day(6 - sinceMonday) };
+}
 const DATE_RE = /^\d{4}-\d{2}-\d{2}$/;
 const TS_RE = /^\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2}$/;
 const addDays = (d: string, n: number) => new Date(new Date(d + "T00:00:00Z").getTime() + n * 86400_000).toISOString().slice(0, 10);
@@ -111,6 +118,7 @@ const ACTIVITY: [string, RegExp, string, ((b: Body, path: string) => string)?][]
   ["POST", /^\/auth\/signup$/, "Signed up", (b) => str(b.name)],
   ["POST", /^\/people$/, "Registered a contact", (b) => str(b.name)],
   ["PUT", /^\/people\/\d+$/, "Edited a contact"],
+  ["PUT", /^\/admin\/people\/\d+$/, "Edited a person's details"],
   ["POST", /^\/attendance$/, "Marked attendance", (b) => `event ${str(b.event)}`],
   ["DELETE", /^\/attendance\//, "Removed an attendance record"],
   ["POST", /^\/registrations$/, "Registered a person for an event", (b) => `event ${str(b.event)}`],
@@ -159,16 +167,22 @@ app.use("*", cors({ origin: webOrigin, allowMethods: ["GET", "POST", "PUT", "PAT
 app.use("*", activityLog);
 
 // ---------- admin-controlled settings (FOLK Settings, a single record)
-/** What is printed on the attendance receipt. Edited in Admin → Settings, used by every phone. */
-type ReceiptFormat = { title: string; subtitle: string; footer: string; show_event: boolean; show_phone: boolean; show_time: boolean; show_count: boolean; show_marked_by: boolean };
-const RECEIPT_DEFAULT: ReceiptFormat = { title: "FOLK", subtitle: "Attendance Receipt", footer: "Hare Krishna!", show_event: true, show_phone: true, show_time: true, show_count: true, show_marked_by: false };
-const RECEIPT_FLAGS = ["show_event", "show_phone", "show_time", "show_count", "show_marked_by"] as const;
+/**
+ * What is printed on the attendance receipt. Edited in Admin → Settings, used by every phone.
+ * `text` is the receipt typed freely by the admin, with fields such as {name} and {phone} (the app fills them in). While `text` is empty the phones
+ * build the layout from the older title / subtitle / footer / show_* values, so a receipt saved before this change looks the same.
+ */
+type ReceiptFormat = { text: string; show_logo: boolean; title: string; subtitle: string; footer: string; show_event: boolean; show_phone: boolean; show_time: boolean; show_count: boolean; show_marked_by: boolean };
+const RECEIPT_DEFAULT: ReceiptFormat = { text: "", show_logo: true, title: "FOLK", subtitle: "Attendance Receipt", footer: "Hare Krishna!", show_event: true, show_phone: true, show_time: true, show_count: true, show_marked_by: false };
+const RECEIPT_FLAGS = ["show_logo", "show_event", "show_phone", "show_time", "show_count", "show_marked_by"] as const;
+const RECEIPT_TEXT_MAX = 800, RECEIPT_LINES_MAX = 30;
 const RECEIPT_TEXTS = ["title", "subtitle", "footer"] as const;
 function receiptFrom(raw: unknown): ReceiptFormat {
   let o: Record<string, unknown> = {};
   try { const v = typeof raw === "string" && raw ? JSON.parse(raw) : raw; if (v && typeof v === "object") o = v as Record<string, unknown>; } catch { /* use defaults */ }
   const out = { ...RECEIPT_DEFAULT };
   for (const k of RECEIPT_TEXTS) if (typeof o[k] === "string") out[k] = (o[k] as string).trim().slice(0, 60);
+  if (typeof o.text === "string") out.text = o.text.split(/\r?\n/).slice(0, RECEIPT_LINES_MAX).map((l) => l.trimEnd()).join("\n").trim().slice(0, RECEIPT_TEXT_MAX);
   for (const k of RECEIPT_FLAGS) if (typeof o[k] === "boolean") out[k] = o[k] as boolean;
   return out;
 }
@@ -379,12 +393,12 @@ app.get("/app/download", async (c) => {
 });
 
 // ---------- app start-up
-type EventRow = { name: string; event_name: string; is_current?: number; is_list?: number };
+type EventRow = { name: string; event_name: string; is_current?: number; is_list?: number; is_weekly?: number };
 /** Every FOLK Event row. `is_list` marks an always-open contact list (Feedback, Contacts Register) as opposed to a dated event. */
 const loadEvents = (c: Ctx) =>
   cached("events", 30_000, async () =>
-    (await erpOf(c).list<EventRow>("FOLK Event", ["name", "event_name", "is_current", "is_list"], [], { order_by: "creation asc" }))
-      .map((e) => ({ code: e.name, name: e.event_name, is_current: !!e.is_current && !e.is_list, is_list: !!e.is_list })));
+    (await erpOf(c).list<EventRow>("FOLK Event", ["name", "event_name", "is_current", "is_list", "is_weekly"], [], { order_by: "creation asc" }))
+      .map((e) => ({ code: e.name, name: e.event_name, is_current: !!e.is_current && !e.is_list, is_list: !!e.is_list, weekly: !!e.is_weekly })));
 /** Events and contact lists, kept apart for the app. */
 const splitEvents = <T extends { is_list: boolean }>(all: T[]) => ({ events: all.filter((e) => !e.is_list), lists: all.filter((e) => e.is_list) });
 
@@ -614,10 +628,52 @@ app.get("/admin/people", async (c) => {
     // Frappe v16 requires dict syntax for SQL functions in `fields`.
     erp.list<{ total: number }>(PERSON, [{ COUNT: "*", as: "total" }] as unknown as string[], q.filters, { ...extra, limit_page_length: 1 }),
   ]);
+  // How many calls have been made to each person on this page (the "Calls" button; the list itself opens from /people/:mob/history).
+  const ids = rows.map((r) => r.name);
+  const callCounts = new Map((await Promise.all(chunk(ids, 100).map((ch) => erp.list<{ person: string; n: number }>(LOG, aggregate({ COUNT: "*", as: "n" }, "person"), [["person", "in", ch]], { group_by: "person" })))).flat().map((x) => [x.person, x.n]));
   return c.json({
     page: q.page, page_size: PAGE_SIZE, total: tot[0]?.total ?? rows.length,
-    people: rows.map(publicPerson),
+    people: rows.map((r) => ({ ...publicPerson(r), calls_count: callCounts.get(r.name) ?? 0 })),
   });
+});
+
+/** Admin edit of any detail of a person, including clearing a field and changing the mobile number. Role and enabled/disabled have their own routes. */
+app.put("/admin/people/:mob", async (c) => {
+  needAdmin(c);
+  const s = c.get("session");
+  const mob = normalizeMobile(c.req.param("mob"));
+  if (!mob) throw bad("Invalid mobile number.");
+  const b = await body(c);
+  const erp = erpOf(c);
+  const row = await getRow(erp, mob);
+  if (!row) throw new HttpError(404, "Person not found.");
+  const patch: Record<string, unknown> = {};
+  const text = (key: string, field: string, max = 120) => { if (typeof b[key] === "string") patch[field] = clean(b[key], max); };
+  const choice = (key: string, allowed: readonly string[]) => { if (typeof b[key] === "string") patch[key] = pick(b[key], allowed); };
+  const whole = (key: string, min: number, max: number) => { if (b[key] !== undefined) patch[key] = intIn(b[key], min, max) ?? 0; };
+  if (typeof b.name === "string") { if (!clean(b.name)) throw bad("Enter the name."); patch.full_name = clean(b.name); }
+  text("profession", "profession"); text("pg_name", "pg_name"); text("venue", "venue", 200); text("gmap_link", "gmap_link", 500);
+  text("fg_name", "fg_name"); text("folk_guide", "folk_guide", 40); text("skills", "skills", 200); text("interests", "interests", 200); text("comments", "comments", 500);
+  for (const [key, field] of [["call_no", "call_no"], ["fg_mob", "fg_mob_no"]] as const) {
+    if (typeof b[key] !== "string") continue;
+    const v = clean(b[key], 20);
+    if (v && !normalizeMobile(v)) throw bad("Enter a valid 10-digit mobile number.");
+    patch[field] = v ? normalizeMobile(v) : "";
+  }
+  choice("gender", GENDERS); choice("level", LEVELS); choice("occupation", OCCUPATIONS); choice("current_stay", STAYS); choice("feedback", FEEDBACKS);
+  whole("age", 1, 120); whole("chanting_rounds", 0, 1000);
+  if (b.new_mob !== undefined && normalizeMobile(b.new_mob) !== mob) {
+    const next = normalizeMobile(b.new_mob);
+    if (!next) throw bad("Enter a valid 10-digit mobile number.");
+    if (mob === s.mob || mob === c.env.MAIN_ADMIN_MOB) throw new HttpError(403, "This account's mobile number can only be changed in ERPNext.");
+    if (await getRow(erp, next)) throw new HttpError(409, "That mobile number already belongs to someone else.");
+    patch.mob_no = next;
+  }
+  if (!Object.keys(patch).length) throw bad("Nothing to change.");
+  c.set("log", { target: `${row.full_name} (${mob})` });
+  await erp.update(PERSON, row.name, patch);
+  memo.delete(`p:${row.name}`);
+  return c.json({ ok: true });
 });
 
 app.patch("/admin/people/:mob/role", async (c) => {
@@ -888,7 +944,9 @@ app.get("/my/calls/summary", async (c) => {
   const event = clean(c.req.query("event"), 60);
   if (!event) throw bad("event is required");
   const erp = erpOf(c);
-  const rows = await erp.list<Asg>(ASG, ASG_FIELDS, [["coordinator", "=", s.id], ["event_code", "=", event], ["status", "!=", PENDING]], { order_by: "submitted_at desc", limit_page_length: 0 });
+  const weekly = (await loadEvents(c)).find((e) => e.code === event)?.weekly; // a weekly event counts only this Monday-Sunday
+  const since: Filters = weekly ? [["submitted_at", ">=", `${istWeek().from} 00:00:00`]] : [];
+  const rows = await erp.list<Asg>(ASG, ASG_FIELDS, [["coordinator", "=", s.id], ["event_code", "=", event], ["status", "!=", PENDING], ...since], { order_by: "submitted_at desc", limit_page_length: 0 });
   const ids = [...new Set(rows.map((r) => r.person))];
   const att = (await Promise.all(chunk(ids, 100).map((ch) => erp.list<{ person: string; ts: string }>(ATT, ["person", "ts"], [["event_code", "=", event], ["person", "in", ch]], { order_by: "ts asc" })))).flat();
   const came = new Map<string, string>();
@@ -1192,12 +1250,22 @@ app.get("/admin/calls/stats", async (c) => {
   const from = DATE_RE.test(c.req.query("from") ?? "") ? c.req.query("from")! : "";
   const to = DATE_RE.test(c.req.query("to") ?? "") ? c.req.query("to")! : "";
   const erp = erpOf(c);
+  // A weekly event (Saturday Satsang) shows this Monday-Sunday only; next Monday it starts again from zero. Nothing is deleted.
+  const weekly = !!event && !!(await loadEvents(c)).find((e) => e.code === event)?.weekly;
+  const week = istWeek();
+  const [wFrom, wTo] = weekly ? [from || week.from, to || week.to] : [from, to];
   const af: Filters = event ? [["event_code", "=", event]] : [];
   const lf: Filters = [...af];
-  if (from) lf.push(["called_at", ">=", `${from} 00:00:00`]);
-  if (to) lf.push(["called_at", "<=", `${to} 23:59:59`]);
+  if (wFrom) lf.push(["called_at", ">=", `${wFrom} 00:00:00`]);
+  if (wTo) lf.push(["called_at", "<=", `${wTo} 23:59:59`]);
+  type AsgCount = { coordinator: string; status: string; n: number };
+  const countAsg = (f: Filters) => erp.list<AsgCount>(ASG, aggregate({ COUNT: "*", as: "n" }, "coordinator", "status"), f, { group_by: "coordinator, status" });
+  // Weekly: everything still waiting for a call, plus what was called this week.
+  const asgRows = weekly
+    ? Promise.all([countAsg([...af, ["status", "=", PENDING]]), countAsg([...af, ["status", "!=", PENDING], ["submitted_at", ">=", `${wFrom} 00:00:00`]])]).then((p) => p.flat())
+    : countAsg(af);
   const [asg, logs, names] = await Promise.all([
-    erp.list<{ coordinator: string; status: string; n: number }>(ASG, aggregate({ COUNT: "*", as: "n" }, "coordinator", "status"), af, { group_by: "coordinator, status" }),
+    asgRows,
     erp.list<{ coordinator: string; status: string; n: number }>(LOG, aggregate({ COUNT: "*", as: "n" }, "coordinator", "status"), lf, { group_by: "coordinator, status" }),
     erp.list<{ name: string; full_name: string }>(PERSON, ["name", "full_name"], [["user_tag", "in", ["Coordinator", "Admin"]]]),
   ]);
@@ -1213,6 +1281,7 @@ app.get("/admin/calls/stats", async (c) => {
   const list = [...who.values()];
   const sum = (k: "assigned" | "pending" | "calls" | "positive") => list.reduce((t, x) => t + x[k], 0);
   return c.json({
+    period: weekly ? { weekly: true, from: wFrom, to: wTo } : null,
     totals: { assigned: sum("assigned"), calls: sum("calls"), positive: sum("positive"), pending: sum("pending") },
     by_status: [...byStatus].map(([label, value]) => ({ label, value })).sort((x, y) => y.value - x.value),
     by_coordinator: list.sort((x, y) => y.calls - x.calls),

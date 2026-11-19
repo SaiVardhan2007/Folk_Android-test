@@ -24,6 +24,7 @@ class AdminRepo {
     );
   }
 
+  Future<void> updatePerson(String mob, Map<String, dynamic> body) => _api.put('/admin/people/$mob', body: body);
   Future<void> setRole(String mob, String tag) => _api.patch('/admin/people/$mob/role', body: {'tag': tag});
   Future<void> setActive(String mob, bool active) => _api.patch('/admin/people/$mob/active', body: {'active': active});
 

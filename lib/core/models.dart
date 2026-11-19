@@ -30,6 +30,7 @@ class Person {
     this.chantingRounds = 0,
     this.feedback = '',
     this.comments = '',
+    this.callsCount = 0,
   });
 
   final String id, mob, name, gender, level, occupation, profession, pgName, eventCode, tag, lastAttendedOn, registeredBy, joined;
@@ -37,6 +38,9 @@ class Person {
   final String currentStay, skills, interests, feedback, comments;
   final bool isActive;
   final int attendanceCount, age, chantingRounds;
+
+  /// Calls made to this person (only filled in by the admin People list).
+  final int callsCount;
 
   bool get isAdmin => tag == 'Admin';
   bool get isCoordinator => tag == 'Coordinator';
@@ -77,6 +81,7 @@ class Person {
     chantingRounds: (j['chanting_rounds'] as num?)?.toInt() ?? 0,
     feedback: j['feedback'] as String? ?? '',
     comments: j['comments'] as String? ?? '',
+    callsCount: (j['calls_count'] as num?)?.toInt() ?? 0,
   );
 
   Map<String, dynamic> toJson() => {

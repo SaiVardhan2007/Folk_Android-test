@@ -60,11 +60,7 @@ Future<ui.Image> renderReceipt(ReceiptFormat f, ReceiptData d) async {
     y += 12;
   }
 
-  void row(String label, String value) {
-    text('$label: $value', size: 24, align: TextAlign.left);
-  }
-
-  final logo = await _loadLogo();
+  final logo = f.showLogo ? await _loadLogo() : null;
   if (logo != null) {
     final h = _logoWidth * _logoCrop.height / _logoCrop.width;
     canvas.drawImageRect(
@@ -74,24 +70,33 @@ Future<ui.Image> renderReceipt(ReceiptFormat f, ReceiptData d) async {
       Paint()..filterQuality = FilterQuality.high,
     );
     y += h + 8;
-  } else {
-    text(f.title, size: 44, bold: true);
   }
-  if (f.showEvent && d.event.isNotEmpty) text(d.event.toUpperCase(), size: 28, bold: true);
-  text(f.subtitle, size: 26);
-  rule();
-  text(d.name.isEmpty ? d.mob : d.name, size: 34, bold: true);
-  y += 4;
-  if (f.showPhone && d.name.isNotEmpty) row('Phone', d.mob);
-  if (f.showTime && d.ts.length >= 16) {
-    row('Date', '${d.ts.substring(8, 10)}-${d.ts.substring(5, 7)}-${d.ts.substring(0, 4)}');
-    row('Time', shortTime(d.ts));
-  }
-  if (f.showCount && d.count > 0) row('Attended', '${d.count} time${d.count == 1 ? '' : 's'}');
-  if (f.showMarkedBy && d.markedBy.isNotEmpty) row('Marked by', d.markedBy);
-  if (f.footer.trim().isNotEmpty) {
-    rule();
-    text(f.footer, size: 26, bold: true);
+
+  // The typed receipt, line by line. Fields are filled in; a line whose fields are all empty is skipped.
+  final values = receiptValues(d);
+  final field = RegExp(r'\{(\w+)\}');
+  for (final raw in f.layout.split('\n')) {
+    final line = raw.trimRight();
+    if (line.trim().isEmpty) {
+      y += 10;
+      continue;
+    }
+    if (line.trim() == '---') {
+      rule();
+      continue;
+    }
+    final fields = field.allMatches(line).toList();
+    if (fields.isNotEmpty && fields.every((m) => (values[m.group(1)] ?? '').isEmpty)) continue;
+    final filled = line.replaceAllMapped(field, (m) => values[m.group(1)] ?? m.group(0)!);
+    if (filled.startsWith('## ')) {
+      text(filled.substring(3), size: 28, bold: true);
+    } else if (filled.startsWith('# ')) {
+      text(filled.substring(2), size: 34, bold: true);
+    } else if (filled.startsWith('~ ')) {
+      text(filled.substring(2), size: 26);
+    } else {
+      text(filled, size: 24, align: TextAlign.left);
+    }
   }
   y += 12;
 
@@ -99,4 +104,18 @@ Future<ui.Image> renderReceipt(ReceiptFormat f, ReceiptData d) async {
   final img = await picture.toImage(kReceiptWidth, y.ceil());
   // toImage leaves unpainted areas transparent; the printer code composites on white.
   return img;
+}
+
+/// What each `{field}` becomes for one person. An empty value means "nothing to show".
+Map<String, String> receiptValues(ReceiptData d) {
+  final hasTime = d.ts.length >= 16;
+  return {
+    'name': d.name.isEmpty ? d.mob : d.name,
+    'phone': d.name.isNotEmpty ? d.mob : '',
+    'event': d.event,
+    'date': hasTime ? '${d.ts.substring(8, 10)}-${d.ts.substring(5, 7)}-${d.ts.substring(0, 4)}' : '',
+    'time': hasTime ? shortTime(d.ts) : '',
+    'count': d.count > 0 ? '${d.count} time${d.count == 1 ? '' : 's'}' : '',
+    'marked_by': d.markedBy,
+  };
 }

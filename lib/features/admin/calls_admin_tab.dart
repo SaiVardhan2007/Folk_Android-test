@@ -9,6 +9,7 @@ import '../../core/widgets.dart';
 import '../auth/auth_controller.dart';
 import 'admin_repo.dart';
 import 'assign_screen.dart';
+import 'templates_editor.dart';
 import '../../core/layout.dart';
 
 /// Coordinators with their counts for the event being worked on.
@@ -174,6 +175,15 @@ class CallsAdminTab extends ConsumerWidget {
                     crossAxisAlignment: CrossAxisAlignment.start,
                     children: [
                       const SectionTitle('Call statistics'),
+                      if (s['period'] is Map)
+                        Padding(
+                          padding: const EdgeInsets.only(bottom: kGapS),
+                          child: Text(
+                            'This week only (Monday ${_shortDate('${(s['period'] as Map)['from']}')} to Sunday ${_shortDate('${(s['period'] as Map)['to']}')}). '
+                            'Calls made and positive start again from zero every Monday; nothing is deleted.',
+                            style: text.bodyMedium,
+                          ),
+                        ),
                       StatGrid(
                         children: [
                           StatTile(label: 'Assigned', value: t['assigned'], color: context.colors.brand),
@@ -308,54 +318,8 @@ class CallsAdminTab extends ConsumerWidget {
   }
 }
 
-class _TemplatesSheet extends ConsumerStatefulWidget {
+class _TemplatesSheet extends StatelessWidget {
   const _TemplatesSheet();
-  @override
-  ConsumerState<_TemplatesSheet> createState() => _TemplatesSheetState();
-}
-
-class _TemplatesSheetState extends ConsumerState<_TemplatesSheet> {
-  final List<({TextEditingController head, TextEditingController body})> _rows = [];
-  int _active = 0;
-  bool _loading = true, _busy = false;
-
-  @override
-  void initState() {
-    super.initState();
-    ref
-        .read(adminRepoProvider)
-        .templates()
-        .then((t) {
-          if (!mounted) return;
-          setState(() {
-            for (var i = 0; i < t.length; i++) {
-              _rows.add((head: TextEditingController(text: '${t[i]['heading']}'), body: TextEditingController(text: '${t[i]['text']}')));
-              if (t[i]['active'] == true) _active = i;
-            }
-            _loading = false;
-          });
-        })
-        .catchError((_) {
-          if (mounted) setState(() => _loading = false);
-        });
-  }
-
-  Future<void> _save() async {
-    setState(() => _busy = true);
-    try {
-      await ref.read(adminRepoProvider).saveTemplates([
-        for (var i = 0; i < _rows.length; i++) {'heading': _rows[i].head.text, 'text': _rows[i].body.text, 'active': i == _active},
-      ]);
-      if (mounted) {
-        showMessage(context, 'Saved. Coordinators get the active message on their next refresh.');
-        Navigator.pop(context);
-      }
-    } on ApiException catch (e) {
-      if (mounted) showMessage(context, e.message, error: true);
-    } finally {
-      if (mounted) setState(() => _busy = false);
-    }
-  }
 
   @override
   Widget build(BuildContext context) {
@@ -369,55 +333,16 @@ class _TemplatesSheetState extends ConsumerState<_TemplatesSheet> {
           style: text.bodyMedium,
         ),
         const SizedBox(height: 12),
-        if (_loading) const Center(child: CircularProgressIndicator()),
-        for (var i = 0; i < _rows.length; i++)
-          Card(
-            child: Padding(
-              padding: const EdgeInsets.all(12),
-              child: Column(
-                children: [
-                  Row(
-                    children: [
-                      RadioGroup<int>(
-                        groupValue: _active,
-                        onChanged: (v) => setState(() => _active = v ?? 0),
-                        child: Radio<int>(value: i),
-                      ),
-                      Expanded(
-                        child: TextField(
-                          controller: _rows[i].head,
-                          decoration: const InputDecoration(labelText: 'Heading'),
-                        ),
-                      ),
-                      IconButton(
-                        tooltip: 'Delete',
-                        icon: const Icon(Icons.delete_outline),
-                        onPressed: () => setState(() {
-                          _rows.removeAt(i);
-                          if (_active >= _rows.length) _active = 0;
-                        }),
-                      ),
-                    ],
-                  ),
-                  const SizedBox(height: 8),
-                  TextField(
-                    controller: _rows[i].body,
-                    maxLines: 4,
-                    textCapitalization: TextCapitalization.sentences,
-                    decoration: const InputDecoration(labelText: 'Message'),
-                  ),
-                ],
-              ),
-            ),
-          ),
-        TextButton.icon(
-          onPressed: () => setState(() => _rows.add((head: TextEditingController(text: 'Message'), body: TextEditingController()))),
-          icon: const Icon(Icons.add),
-          label: const Text('Add a message'),
-        ),
-        const SizedBox(height: 8),
-        FilledButton(onPressed: _busy ? null : _save, child: Text(_busy ? 'Saving…' : 'Save')),
+        TemplatesEditor(onSaved: () => Navigator.pop(context)),
       ],
     );
   }
+}
+
+/// "2026-11-16" -> "16 Nov".
+String _shortDate(String iso) {
+  const months = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
+  if (iso.length < 10) return iso;
+  final m = int.tryParse(iso.substring(5, 7)) ?? 0;
+  return '${int.tryParse(iso.substring(8, 10)) ?? iso.substring(8, 10)} ${m >= 1 && m <= 12 ? months[m - 1] : ''}'.trim();
 }

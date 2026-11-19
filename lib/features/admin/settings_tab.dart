@@ -3,10 +3,8 @@ import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import '../../core/api.dart';
-import '../../core/app_update.dart';
 import '../../core/widgets.dart';
 import '../../core/layout.dart';
-import '../../core/util.dart';
 import '../auth/auth_controller.dart';
 import '../printing/printer_service.dart';
 import '../printing/printer_sheet.dart';
@@ -14,6 +12,7 @@ import '../printing/receipt_format.dart';
 import '../printing/receipt_renderer.dart';
 import 'admin_repo.dart';
 import 'logs_screen.dart';
+import 'templates_editor.dart';
 
 final _settingsProvider = FutureProvider.autoDispose<Map<String, dynamic>>((ref) => ref.read(adminRepoProvider).settings());
 
@@ -102,41 +101,73 @@ class SettingsTab extends ConsumerWidget {
         Text('WhatsApp message formats', style: text.titleLarge),
         const SizedBox(height: 4),
         Text(
-          'WhatsApp only delivers automatic messages from templates approved in your WhatsApp Business account. The wording is edited there; '
-          'enter each template\'s name here to choose which one is sent.',
+          'Two kinds of message: automatic messages the server sends (welcome and coordinator alert), and the text a coordinator sends with the Send Message button.',
           style: text.bodyMedium,
         ),
         const SizedBox(height: 12),
-        if (s.hasValue) ...[
-          _TemplateName(
-            label: 'Message template (welcome and coordinator alert)',
-            hint: 'Parameters: name, event, venue, map link, call number',
-            setting: 'welcome_template',
-            value: '${s.value!['welcome_template'] ?? ''}',
-            onSave: (k, v) => _setText(context, ref, k, v),
+        Card(
+          child: Padding(
+            padding: const EdgeInsets.all(kGapL),
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.stretch,
+              children: [
+                Text('Automatic messages', style: text.titleMedium),
+                const SizedBox(height: 4),
+                Text(
+                  'WhatsApp only delivers automatic messages from templates approved in your WhatsApp Business account, so the wording itself is edited there. '
+                  'Type each template\'s name exactly as it is in that account to choose which one is sent.',
+                  style: text.bodyMedium,
+                ),
+                const SizedBox(height: 12),
+                if (s.hasValue) ...[
+                  _TemplateName(
+                    key: ValueKey('welcome_${s.value!['welcome_template']}'),
+                    label: 'Welcome message template',
+                    hint: 'Sent to a new contact. Fields in order: name, event, venue, map link, call number',
+                    setting: 'welcome_template',
+                    value: '${s.value!['welcome_template'] ?? ''}',
+                    onSave: (k, v) => _setText(context, ref, k, v),
+                  ),
+                  const SizedBox(height: 12),
+                  _TemplateName(
+                    key: ValueKey('attendance_${s.value!['attendance_template']}'),
+                    label: 'Coordinator alert template',
+                    hint: 'Sent to the coordinator when their contact attends. Same five fields as the welcome template',
+                    setting: 'attendance_template',
+                    value: '${s.value!['attendance_template'] ?? ''}',
+                    onSave: (k, v) => _setText(context, ref, k, v),
+                  ),
+                ] else
+                  const Center(child: CircularProgressIndicator()),
+              ],
+            ),
           ),
-        ],
-        const SizedBox(height: 16),
-        Text('App update', style: text.titleLarge),
-        const SizedBox(height: 4),
-        Text(
-          'After you release a new build, enter its build number as Latest: phones below it see an "Update available" pop-up they can dismiss. '
-          'For a critical fix, raise Minimum too: phones below it are blocked until they update.',
-          style: text.bodyMedium,
         ),
         const SizedBox(height: 12),
-        if (s.hasValue)
-          _UpdateEditor(
-            key: ValueKey('${s.value!['app_update']}'),
-            initial: AppUpdate.fromJson((s.value!['app_update'] as Map?)?.cast<String, dynamic>()),
-            onSaved: () => ref.invalidate(_settingsProvider),
+        Card(
+          child: Padding(
+            padding: const EdgeInsets.all(kGapL),
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.stretch,
+              children: [
+                Text('Send Message button', style: text.titleMedium),
+                const SizedBox(height: 4),
+                Text(
+                  'Type the messages coordinators can send from a call card. The selected one is sent after "Hare Krishna <name>". You can use {name} inside it.',
+                  style: text.bodyMedium,
+                ),
+                const SizedBox(height: 12),
+                const TemplatesEditor(),
+              ],
+            ),
           ),
+        ),
         const SizedBox(height: 16),
         Text('Receipt format', style: text.titleLarge),
         const SizedBox(height: 4),
         Text(
           'What the "Mark & Print Receipt" button prints on the Bluetooth or USB thermal printer. '
-          'Everyone\'s phone uses this layout after it next opens the app.',
+          'Type the receipt exactly as you want it; everyone\'s phone uses it after it next opens the app.',
           style: text.bodyMedium,
         ),
         const SizedBox(height: 12),
@@ -165,7 +196,7 @@ class SettingsTab extends ConsumerWidget {
 }
 
 class _TemplateName extends StatefulWidget {
-  const _TemplateName({required this.label, required this.hint, required this.setting, required this.value, required this.onSave});
+  const _TemplateName({super.key, required this.label, required this.hint, required this.setting, required this.value, required this.onSave});
   final String label, hint, setting, value;
   final void Function(String key, String value) onSave;
 
@@ -212,31 +243,28 @@ class _ReceiptEditor extends ConsumerStatefulWidget {
 }
 
 class _ReceiptEditorState extends ConsumerState<_ReceiptEditor> {
-  late final _title = TextEditingController(text: widget.initial.title);
-  late final _subtitle = TextEditingController(text: widget.initial.subtitle);
-  late final _footer = TextEditingController(text: widget.initial.footer);
-  late bool _event = widget.initial.showEvent, _phone = widget.initial.showPhone, _time = widget.initial.showTime;
-  late bool _count = widget.initial.showCount, _by = widget.initial.showMarkedBy;
+  late final _text = TextEditingController(text: widget.initial.layout);
+  late bool _logo = widget.initial.showLogo;
   bool _busy = false;
 
   @override
   void dispose() {
-    _title.dispose();
-    _subtitle.dispose();
-    _footer.dispose();
+    _text.dispose();
     super.dispose();
   }
 
-  ReceiptFormat get _format => ReceiptFormat(
-    title: _title.text.trim(),
-    subtitle: _subtitle.text.trim(),
-    footer: _footer.text.trim(),
-    showEvent: _event,
-    showPhone: _phone,
-    showTime: _time,
-    showCount: _count,
-    showMarkedBy: _by,
-  );
+  ReceiptFormat get _format => ReceiptFormat(text: _text.text.trim(), showLogo: _logo);
+
+  static const _sample = ReceiptData(name: 'Sample Name', mob: '9876543210', event: 'Saturday Satsang', ts: '2026-11-21 17:45:00', count: 3, markedBy: 'Volunteer');
+
+  /// Puts `s` where the cursor is (or at the end).
+  void _insert(String s) {
+    final t = _text.text;
+    final sel = _text.selection;
+    final start = sel.isValid ? sel.start : t.length;
+    final end = sel.isValid ? sel.end : t.length;
+    _text.value = TextEditingValue(text: t.replaceRange(start, end, s), selection: TextSelection.collapsed(offset: start + s.length));
+  }
 
   Future<void> _save() async {
     setState(() => _busy = true);
@@ -251,17 +279,34 @@ class _ReceiptEditorState extends ConsumerState<_ReceiptEditor> {
     }
   }
 
-  /// Prints a sample with the values on screen (saved or not), connecting the printer first if needed.
+  /// Shows the receipt as it will print, with sample details.
+  Future<void> _preview() async {
+    setState(() => _busy = true);
+    try {
+      final image = await renderReceipt(_format, _sample);
+      if (!mounted) return;
+      await showDialog<void>(
+        context: context,
+        builder: (d) => AlertDialog(
+          title: const Text('How it will print'),
+          content: SingleChildScrollView(
+            child: Container(color: Colors.white, child: RawImage(image: image, width: 384, fit: BoxFit.fitWidth)),
+          ),
+          actions: [TextButton(onPressed: () => Navigator.pop(d), child: const Text('Close'))],
+        ),
+      );
+    } finally {
+      if (mounted) setState(() => _busy = false);
+    }
+  }
+
+  /// Prints a sample with the text on screen (saved or not), connecting the printer first if needed.
   Future<void> _test() async {
     final printer = ref.read(printerServiceProvider);
     if (!await ensurePrinter(context, printer)) return;
     setState(() => _busy = true);
     try {
-      final image = await renderReceipt(
-        _format,
-        ReceiptData(name: 'Sample Name', mob: '9876543210', event: 'Sunday Programme', ts: istTimestamp(), count: 3, markedBy: 'Volunteer'),
-      );
-      await printer.printImage(image);
+      await printer.printImage(await renderReceipt(_format, _sample));
     } on PrinterException catch (e) {
       await printer.disconnect();
       if (mounted) showMessage(context, 'Could not print: ${e.message}', error: true);
@@ -271,161 +316,54 @@ class _ReceiptEditorState extends ConsumerState<_ReceiptEditor> {
   }
 
   @override
-  Widget build(BuildContext context) => Card(
-    child: Padding(
-      padding: const EdgeInsets.all(kGapL),
-      child: Column(
-        crossAxisAlignment: CrossAxisAlignment.stretch,
-        children: [
-          TextField(
-            controller: _title,
-            maxLength: 60,
-            decoration: const InputDecoration(labelText: 'Heading', helperText: 'Big text at the top, for example your centre name'),
-          ),
-          const SizedBox(height: kGapS),
-          TextField(
-            controller: _subtitle,
-            maxLength: 60,
-            decoration: const InputDecoration(labelText: 'Sub-heading'),
-          ),
-          const SizedBox(height: kGapS),
-          TextField(
-            controller: _footer,
-            maxLength: 60,
-            decoration: const InputDecoration(labelText: 'Footer message'),
-          ),
-          SwitchListTile(
-            contentPadding: EdgeInsets.zero,
-            value: _phone,
-            onChanged: (v) => setState(() => _phone = v),
-            title: const Text('Show phone number'),
-          ),
-          SwitchListTile(
-            contentPadding: EdgeInsets.zero,
-            value: _event,
-            onChanged: (v) => setState(() => _event = v),
-            title: const Text('Show event name'),
-          ),
-          SwitchListTile(
-            contentPadding: EdgeInsets.zero,
-            value: _time,
-            onChanged: (v) => setState(() => _time = v),
-            title: const Text('Show date and time'),
-          ),
-          SwitchListTile(
-            contentPadding: EdgeInsets.zero,
-            value: _count,
-            onChanged: (v) => setState(() => _count = v),
-            title: const Text('Show how many times attended'),
-          ),
-          SwitchListTile(
-            contentPadding: EdgeInsets.zero,
-            value: _by,
-            onChanged: (v) => setState(() => _by = v),
-            title: const Text('Show who marked it'),
-          ),
-          const SizedBox(height: kGapS),
-          FilledButton.icon(onPressed: _busy ? null : _save, icon: const Icon(Icons.save_outlined), label: const Text('Save receipt format')),
-          if (!kIsWeb) ...[
-            // thermal printers are reached over Bluetooth/USB, only in the Android app
-            const SizedBox(height: kGapS),
-            OutlinedButton.icon(onPressed: _busy ? null : _test, icon: const Icon(Icons.print_outlined), label: const Text('Print a test receipt')),
-          ],
-        ],
-      ),
-    ),
-  );
-}
-
-class _UpdateEditor extends ConsumerStatefulWidget {
-  const _UpdateEditor({super.key, required this.initial, required this.onSaved});
-  final AppUpdate initial;
-  final VoidCallback onSaved;
-
-  @override
-  ConsumerState<_UpdateEditor> createState() => _UpdateEditorState();
-}
-
-class _UpdateEditorState extends ConsumerState<_UpdateEditor> {
-  late final _latest = TextEditingController(text: widget.initial.latestBuild == 0 ? '' : '${widget.initial.latestBuild}');
-  late final _min = TextEditingController(text: widget.initial.minBuild == 0 ? '' : '${widget.initial.minBuild}');
-  late final _url = TextEditingController(text: widget.initial.url);
-  late final _msg = TextEditingController(text: widget.initial.message);
-  bool _busy = false;
-
-  @override
-  void dispose() {
-    _latest.dispose();
-    _min.dispose();
-    _url.dispose();
-    _msg.dispose();
-    super.dispose();
-  }
-
-  Future<void> _save() async {
-    setState(() => _busy = true);
-    try {
-      await ref.read(adminRepoProvider).saveSettings({
-        'app_update': {
-          'latest_build': int.tryParse(_latest.text.trim()) ?? 0,
-          'min_build': int.tryParse(_min.text.trim()) ?? 0,
-          'url': _url.text.trim(),
-          'message': _msg.text.trim(),
-        },
-      });
-      widget.onSaved();
-      if (mounted) showMessage(context, 'Update notice saved');
-    } on ApiException catch (e) {
-      if (mounted) showMessage(context, e.message, error: true);
-    } finally {
-      if (mounted) setState(() => _busy = false);
-    }
-  }
-
-  @override
   Widget build(BuildContext context) {
-    final installed = ref.watch(installedBuildProvider).value;
+    final text = Theme.of(context).textTheme;
     return Card(
       child: Padding(
         padding: const EdgeInsets.all(kGapL),
         child: Column(
-          crossAxisAlignment: CrossAxisAlignment.start,
+          crossAxisAlignment: CrossAxisAlignment.stretch,
           children: [
-            if (installed != null) Text('This phone is on build $installed', style: Theme.of(context).textTheme.bodyMedium),
+            Text('Tap a field to add it where the cursor is:', style: text.bodyMedium),
             const SizedBox(height: kGapS),
-            FieldGrid(
+            Wrap(
+              spacing: 8,
+              runSpacing: 4,
               children: [
-                TextField(
-                  controller: _latest,
-                  keyboardType: TextInputType.number,
-                  decoration: const InputDecoration(labelText: 'Latest build', helperText: 'Asks to update (can dismiss)'),
-                ),
-                TextField(
-                  controller: _min,
-                  keyboardType: TextInputType.number,
-                  decoration: const InputDecoration(labelText: 'Minimum build', helperText: 'Below this: must update'),
-                ),
+                for (final f in kReceiptFields) ActionChip(label: Text(f.label), onPressed: () => _insert('{${f.key}}')),
               ],
             ),
             const SizedBox(height: kGapM),
             TextField(
-              controller: _url,
-              keyboardType: TextInputType.url,
-              autocorrect: false,
-              decoration: const InputDecoration(
-                labelText: 'Download link',
-                helperText: 'Direct link to the .apk file (for example a GitHub release). Not a Google Drive link.',
-              ),
-            ),
-            const SizedBox(height: kGapM),
-            TextField(
-              controller: _msg,
-              maxLines: 2,
-              maxLength: 300,
-              decoration: const InputDecoration(labelText: 'Message (optional)'),
+              controller: _text,
+              minLines: 10,
+              maxLines: 24,
+              maxLength: 800,
+              keyboardType: TextInputType.multiline,
+              textCapitalization: TextCapitalization.sentences,
+              decoration: const InputDecoration(labelText: 'Receipt text', alignLabelWithHint: true),
             ),
             const SizedBox(height: kGapS),
-            FilledButton(onPressed: _busy ? null : _save, child: const Text('Save update notice')),
+            Text(
+              'One line here is one line on paper. Write fields in curly brackets, for example "Flower packets for {name} ({phone})". '
+              'Start a line with "# " for big bold text, "## " for bold, "~ " to centre it, or write --- alone on a line for a dotted line. '
+              'A line is left out when all its fields are empty.',
+              style: text.bodyMedium,
+            ),
+            SwitchListTile(contentPadding: EdgeInsets.zero, value: _logo, onChanged: (v) => setState(() => _logo = v), title: const Text('Print the FOLK logo at the top')),
+            const SizedBox(height: kGapS),
+            FilledButton.icon(onPressed: _busy ? null : _save, icon: const Icon(Icons.save_outlined), label: const Text('Save receipt format')),
+            const SizedBox(height: kGapS),
+            OutlinedButton.icon(onPressed: _busy ? null : _preview, icon: const Icon(Icons.visibility_outlined), label: const Text('Preview')),
+            if (!kIsWeb) ...[
+              // thermal printers are reached over Bluetooth/USB, only in the Android app
+              const SizedBox(height: kGapS),
+              OutlinedButton.icon(onPressed: _busy ? null : _test, icon: const Icon(Icons.print_outlined), label: const Text('Print a test receipt')),
+            ],
+            TextButton(
+              onPressed: _busy ? null : () => setState(() => _text.text = const ReceiptFormat().layout),
+              child: const Text('Start again from the standard receipt'),
+            ),
           ],
         ),
       ),
