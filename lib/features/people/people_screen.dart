@@ -40,7 +40,24 @@ const _cSessions = _Col('Sessions', 110);
 const _cLast = _Col('Last attended', 140);
 const _cJoined = _Col('Joined', 120);
 const _cStatus = _Col('Status', 150);
-const _columns = [_cName, _cMob, _cRole, _cLevel, _cGender, _cAge, _cOcc, _cCompany, _cPg, _cStay, _cGuide, _cCalls, _cSessions, _cLast, _cJoined, _cStatus];
+const _columns = [
+  _cName,
+  _cMob,
+  _cRole,
+  _cLevel,
+  _cGender,
+  _cAge,
+  _cOcc,
+  _cCompany,
+  _cPg,
+  _cStay,
+  _cGuide,
+  _cCalls,
+  _cSessions,
+  _cLast,
+  _cJoined,
+  _cStatus,
+];
 final double _tableWidth = _columns.fold<double>(0, (t, c) => t + c.width);
 const double _rowHeight = 60;
 
@@ -163,7 +180,11 @@ class _PeopleScreenState extends ConsumerState<PeopleScreen> with AutomaticKeepA
 
   Widget _count(int n, VoidCallback onTap) => FilledButton.tonal(
     onPressed: onTap,
-    style: FilledButton.styleFrom(minimumSize: const Size(48, 36), padding: const EdgeInsets.symmetric(horizontal: 14), tapTargetSize: MaterialTapTargetSize.shrinkWrap),
+    style: FilledButton.styleFrom(
+      minimumSize: const Size(48, 36),
+      padding: const EdgeInsets.symmetric(horizontal: 14),
+      tapTargetSize: MaterialTapTargetSize.shrinkWrap,
+    ),
     child: Text('$n'),
   );
 
@@ -176,7 +197,10 @@ class _PeopleScreenState extends ConsumerState<PeopleScreen> with AutomaticKeepA
 
     Widget cell(_Col c, Widget child) => SizedBox(
       width: c.width,
-      child: Padding(padding: const EdgeInsets.symmetric(horizontal: 10), child: Align(alignment: Alignment.centerLeft, child: child)),
+      child: Padding(
+        padding: const EdgeInsets.symmetric(horizontal: 10),
+        child: Align(alignment: Alignment.centerLeft, child: child),
+      ),
     );
     Widget plain(_Col c, String v) => cell(c, Text(v.isEmpty ? '—' : v, maxLines: 2, overflow: TextOverflow.ellipsis, style: text.bodyMedium));
 
@@ -187,7 +211,9 @@ class _PeopleScreenState extends ConsumerState<PeopleScreen> with AutomaticKeepA
         onTap: () => _manage(p),
         child: Container(
           height: _rowHeight,
-          decoration: BoxDecoration(border: Border(bottom: BorderSide(color: line))),
+          decoration: BoxDecoration(
+            border: Border(bottom: BorderSide(color: line)),
+          ),
           child: Row(
             children: [
               cell(_cName, Text(p.name, maxLines: 2, overflow: TextOverflow.ellipsis, style: text.titleSmall)),
@@ -249,7 +275,10 @@ class _PeopleScreenState extends ConsumerState<PeopleScreen> with AutomaticKeepA
                 ],
               ),
               const SizedBox(height: 10),
-              Text('$_total ${_total == 1 ? 'person' : 'people'}  •  ${_sorts[_filters['sort']] ?? ''}  •  tap a row to edit', style: text.bodyMedium),
+              Text(
+                '$_total ${_total == 1 ? 'person' : 'people'}  •  ${_sorts[_filters['sort']] ?? ''}  •  tap a row to edit',
+                style: text.bodyMedium,
+              ),
               const SizedBox(height: 8),
               if (_error != null) ErrorView(message: _error!, onRetry: () => _load(reset: true)),
             ],
@@ -272,11 +301,7 @@ class _PeopleScreenState extends ConsumerState<PeopleScreen> with AutomaticKeepA
                           color: Theme.of(context).colorScheme.surfaceContainerHigh,
                           border: Border(bottom: BorderSide(color: line)),
                         ),
-                        child: Row(
-                          children: [
-                            for (final c in _columns) cell(c, Text(c.label, style: text.labelLarge)),
-                          ],
-                        ),
+                        child: Row(children: [for (final c in _columns) cell(c, Text(c.label, style: text.labelLarge))]),
                       ),
                       Expanded(
                         child: RefreshIndicator(
@@ -484,7 +509,9 @@ class _EditSheetState extends ConsumerState<_EditSheet> {
         Text(p.name, style: text.titleLarge),
         const SizedBox(height: 2),
         Text(
-          p.isPending ? 'Awaiting approval' : '${p.attendanceCount} session${p.attendanceCount == 1 ? '' : 's'}  •  ${p.callsCount} call${p.callsCount == 1 ? '' : 's'}',
+          p.isPending
+              ? 'Awaiting approval'
+              : '${p.attendanceCount} session${p.attendanceCount == 1 ? '' : 's'}  •  ${p.callsCount} call${p.callsCount == 1 ? '' : 's'}',
           style: text.bodyMedium,
         ),
         const SizedBox(height: kGapL),
@@ -512,9 +539,19 @@ class _EditSheetState extends ConsumerState<_EditSheet> {
         const SizedBox(height: kGapM),
         FieldGrid(
           children: [
-            TextField(controller: _guide, decoration: const InputDecoration(labelText: 'FOLK Guide (code)', prefixIcon: Icon(Icons.badge_outlined))),
-            TextField(controller: _venue, decoration: const InputDecoration(labelText: 'Venue', prefixIcon: Icon(Icons.place_outlined))),
-            TextField(controller: _map, keyboardType: TextInputType.url, decoration: const InputDecoration(labelText: 'Map link', prefixIcon: Icon(Icons.map_outlined))),
+            TextField(
+              controller: _guide,
+              decoration: const InputDecoration(labelText: 'FOLK Guide (code)', prefixIcon: Icon(Icons.badge_outlined)),
+            ),
+            TextField(
+              controller: _venue,
+              decoration: const InputDecoration(labelText: 'Venue', prefixIcon: Icon(Icons.place_outlined)),
+            ),
+            TextField(
+              controller: _map,
+              keyboardType: TextInputType.url,
+              decoration: const InputDecoration(labelText: 'Map link', prefixIcon: Icon(Icons.map_outlined)),
+            ),
           ],
         ),
         SwitchListTile(
@@ -525,7 +562,11 @@ class _EditSheetState extends ConsumerState<_EditSheet> {
           subtitle: locked ? const Text('This is your own account: you can\'t change your role or disable it here.') : null,
         ),
         const SizedBox(height: kGapS),
-        FilledButton.icon(onPressed: _busy ? null : () => _save(locked), icon: const Icon(Icons.save_outlined), label: Text(_busy ? 'Saving…' : 'Save changes')),
+        FilledButton.icon(
+          onPressed: _busy ? null : () => _save(locked),
+          icon: const Icon(Icons.save_outlined),
+          label: Text(_busy ? 'Saving…' : 'Save changes'),
+        ),
       ],
     );
   }

@@ -1,3 +1,4 @@
+import 'dart:async';
 import 'dart:ui' as ui;
 
 import 'package:flutter/services.dart';
@@ -9,6 +10,10 @@ const _lastKey = 'folk_last_printer';
 /// Blank paper added under the receipt (in printer dots, 8 per mm) so the last lines clear the tear-off bar.
 /// It is part of the picture itself: small portable printers ignore feed commands, but they always print a picture.
 const int kReceiptFeedDots = 80;
+
+/// Blank rows printed first. A printer that is still waking up or resetting can drop or garble its first bytes (the top of the logo
+/// came out cut); this way whatever is lost is blank paper, not the picture.
+const int kReceiptLeadDots = 24;
 
 enum PrinterKind { bluetooth, usb }
 
@@ -29,6 +34,19 @@ class PrinterException implements Exception {
 /// Talks to a thermal receipt printer (ESC/POS) over Bluetooth or USB through the native bridge (PrinterBridge.kt).
 class PrinterService {
   static const _ch = MethodChannel('folk/printer');
+
+  final _changes = StreamController<bool>.broadcast();
+
+  /// true when a printer gets connected, false when it is disconnected. The print station listens to this.
+  Stream<bool> get connectionChanges => _changes.stream;
+
+  // Receipts are printed strictly one after another, whoever asks (this phone's own check-in, the queue, a test print).
+  Future<void> _turn = Future.value();
+  Future<T> _serially<T>(Future<T> Function() job) {
+    final result = _turn.then((_) => job());
+    _turn = result.then((_) {}, onError: (_) {});
+    return result;
+  }
 
   Future<T> _call<T>(String m, [Map<String, Object?>? args]) async {
     try {
@@ -61,9 +79,13 @@ class PrinterService {
     await _call<bool>(d.kind == PrinterKind.usb ? 'connectUsb' : 'connectBluetooth', {'id': d.id});
     final p = await SharedPreferences.getInstance();
     await p.setStringList(_lastKey, [d.kind.name, d.name, d.id]);
+    _changes.add(true);
   }
 
-  Future<void> disconnect() => _call<bool>('disconnect');
+  Future<void> disconnect() async {
+    await _call<bool>('disconnect');
+    _changes.add(false);
+  }
 
   Future<PrinterDevice?> lastUsed() async {
     final v = (await SharedPreferences.getInstance()).getStringList(_lastKey);
@@ -87,29 +109,44 @@ class PrinterService {
   Future<void> _write(Uint8List data) => _call<bool>('write', {'data': data});
 
   /// Converts the picture to 1-bit and prints it (ESC/POS raster, in small slices the printer handles reliably), then feeds and cuts.
-  Future<void> printImage(ui.Image image, {int threshold = 150}) async {
+  Future<void> printImage(ui.Image image, {int threshold = 150}) => _serially(() => _printImage(image, threshold));
+
+  Future<void> _printImage(ui.Image image, int threshold) async {
     final bd = await image.toByteData(format: ui.ImageByteFormat.rawRgba);
     final w = image.width, h = image.height;
     final bytesPerRow = (w + 7) ~/ 8;
     final rgba = bd!.buffer.asUint8List();
-    final total = h + kReceiptFeedDots;
+    final total = kReceiptLeadDots + h + kReceiptFeedDots;
     final out = Uint8List(bytesPerRow * total); // the extra rows stay 0 = blank paper
     for (var y = 0; y < h; y++) {
       for (var x = 0; x < w; x++) {
         final i = (y * w + x) * 4;
         final a = rgba[i + 3] / 255.0;
         final l = (0.299 * rgba[i] + 0.587 * rgba[i + 1] + 0.114 * rgba[i + 2]) * a + 255 * (1 - a);
-        if (l < threshold) out[y * bytesPerRow + (x >> 3)] |= 0x80 >> (x & 7);
+        if (l < threshold) out[(y + kReceiptLeadDots) * bytesPerRow + (x >> 3)] |= 0x80 >> (x & 7);
       }
     }
 
     await _write(Uint8List.fromList([0x1B, 0x40])); // initialise
-    const rows = 40;
+    await Future.delayed(const Duration(milliseconds: 500)); // the printer ignores or garbles data sent while it resets
+    // Small slices, each followed by a pause that grows with how dark the slice is. A dark slice (the logo) takes a thermal head much
+    // longer to burn than text; a fixed pause let the printer's small buffer overflow there, and whole slices were dropped
+    // (a white gap in the middle and a stretched picture).
+    const rows = 24;
     for (var y = 0; y < total; y += rows) {
       final n = (total - y) < rows ? (total - y) : rows;
+      final slice = out.sublist(y * bytesPerRow, (y + n) * bytesPerRow);
+      var dots = 0;
+      for (var v in slice) {
+        while (v != 0) {
+          dots += v & 1;
+          v >>= 1;
+        }
+      }
+      final dark = dots / (n * w); // 0 = blank paper, 1 = solid black
       final header = [0x1D, 0x76, 0x30, 0x00, bytesPerRow & 255, bytesPerRow >> 8, n & 255, n >> 8];
-      await _write(Uint8List.fromList([...header, ...out.sublist(y * bytesPerRow, (y + n) * bytesPerRow)]));
-      await Future.delayed(const Duration(milliseconds: 250));
+      await _write(Uint8List.fromList([...header, ...slice]));
+      await Future.delayed(Duration(milliseconds: 150 + (1000 * dark).round()));
     }
     await Future.delayed(const Duration(milliseconds: 600)); // let the printer finish moving paper before the cut
     await _write(Uint8List.fromList([0x1D, 0x56, 0x42, 0x00])); // feed to the cut position + partial cut (ignored by printers without a cutter)

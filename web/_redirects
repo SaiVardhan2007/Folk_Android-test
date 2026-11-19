@@ -1,0 +1,2 @@
+# Registration, feedback and volunteer forms are served by the API server; the website redirects these addresses there.
+/f/*  https://folk-api.jayadeva-jydd.workers.dev/f/:splat  302

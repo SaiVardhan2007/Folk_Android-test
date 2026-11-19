@@ -1,5 +1,6 @@
 import 'package:flutter/foundation.dart' show kIsWeb;
 import 'dart:async';
+import 'dart:math' show Random;
 
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
@@ -191,18 +192,18 @@ class _AttendanceScreenState extends ConsumerState<AttendanceScreen> with Widget
           );
       if (!mounted) return;
       HapticFeedback.mediumImpact();
-      var printed = false;
+      String? printed; // what to tell the user about the receipt: printed here, sent to the printing phone, or waiting
       if (print) printed = await _printReceipt(event, mob, r, _person?.attendanceCount ?? 0);
       if (!mounted) return;
       final who = r.name.isEmpty ? mob : r.name;
       if (r.queued) {
-        showMessage(context, '$who saved offline. It will be sent automatically.${printed ? ' Receipt printed.' : ''}');
+        showMessage(context, '$who saved offline. It will be sent automatically.${printed == null ? '' : ' $printed'}');
         ref.read(pendingCountProvider.notifier).refresh();
       } else if (r.status == 'already') {
-        showMessage(context, printed ? '$who was already marked today. Receipt printed.' : '$who is already marked present today.');
+        showMessage(context, printed == null ? '$who is already marked present today.' : '$who was already marked today. $printed');
       } else {
         final base = '${r.registered ? 'Registered and marked' : 'Marked present'}: $who';
-        showMessage(context, printed ? '$base. Receipt printed.' : base);
+        showMessage(context, printed == null ? base : '$base. $printed');
       }
       ref.invalidate(todayProvider(event));
       _reset();
@@ -213,9 +214,10 @@ class _AttendanceScreenState extends ConsumerState<AttendanceScreen> with Widget
     }
   }
 
-  /// Prints the receipt. Returns false (with a message) if the printer failed; the check-in itself is already saved,
-  /// and pressing "Mark & Print Receipt" again prints without marking twice.
-  Future<bool> _printReceipt(String event, String mob, MarkResult r, int countBefore) async {
+  /// Prints the receipt. If this phone is connected to the printer it prints here; otherwise the receipt goes to the shared queue and the phone
+  /// that is connected to the printer prints it. Returns what to tell the user, or null if it failed (a message is shown). The check-in itself
+  /// is already saved, and pressing "Mark & Print Receipt" again prints without marking twice.
+  Future<String?> _printReceipt(String event, String mob, MarkResult r, int countBefore) async {
     final printer = ref.read(printerServiceProvider);
     final boot = ref.read(bootstrapProvider).value;
     var ts = r.ts;
@@ -238,20 +240,49 @@ class _AttendanceScreenState extends ConsumerState<AttendanceScreen> with Widget
       count: r.status == 'already' ? countBefore : countBefore + 1,
       markedBy: ref.read(authProvider).value?.name ?? '',
     );
-    final image = await renderReceipt(boot?.receipt ?? const ReceiptFormat(), data);
-    for (var attempt = 0; attempt < 2; attempt++) {
+    if (!kIsWeb && await printer.isConnected) {
+      final image = await renderReceipt(boot?.receipt ?? const ReceiptFormat(), data);
       try {
         await printer.printImage(image);
-        return true;
+        return 'Receipt printed.';
       } on PrinterException catch (e) {
-        await printer.disconnect(); // the link is stale (printer off / out of range): reconnect or ask
-        if (attempt == 1 || !mounted || !await ensurePrinter(context, printer)) {
-          if (mounted) showMessage(context, 'Could not print: ${e.message}. Press "Mark & Print Receipt" to try again.', error: true);
-          return false;
-        }
+        await printer.disconnect(); // the printer is off or out of range: this phone stops being the printing phone
+        if (mounted) showMessage(context, 'Could not print: ${e.message}. Press "Mark & Print Receipt" to try again.', error: true);
+        return null;
       }
     }
-    return false;
+    return _queueReceipt(data);
+  }
+
+  /// Sends the receipt to the shared queue. When no phone is connected to the printer yet, offers to connect this one: the receipt is already
+  /// waiting and prints as soon as this phone connects.
+  Future<String?> _queueReceipt(ReceiptData d) async {
+    try {
+      final res = await ref
+          .read(apiProvider)
+          .post(
+            '/print/jobs',
+            body: {
+              'key':
+                  '${DateTime.now().microsecondsSinceEpoch}-${d.mob}-${Random().nextInt(1 << 30)}', // one tap = one receipt, even if the request is repeated
+              'name': d.name,
+              'mob': d.mob,
+              'event': d.event,
+              'ts': d.ts,
+              'count': d.count,
+            },
+          );
+      if (((res['stations'] as num?)?.toInt() ?? 0) > 0) return 'Receipt sent to the printer.';
+      if (kIsWeb || !mounted) return 'Receipt saved. It prints when a phone is connected to the printer.';
+      final connected = await ensurePrinter(context, ref.read(printerServiceProvider));
+      return connected ? 'Receipt sent to the printer.' : 'Receipt saved. It prints when a phone is connected to the printer.';
+    } on ApiException catch (e) {
+      if (mounted) {
+        final why = e.isNetwork ? 'No internet, so the receipt could not be sent. Press "Mark & Print Receipt" to try again.' : e.message;
+        showMessage(context, why, error: true);
+      }
+      return null;
+    }
   }
 
   Future<void> _undo(AttendanceItem item, String event) async {

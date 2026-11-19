@@ -16,6 +16,8 @@ export type Bindings = {
   WELCOME_VENUE?: string;
   WELCOME_MAP_LINK?: string;
   DEFAULT_GUIDE_MOB?: string;
+  /** The shared print queue (a Durable Object, see printHub.ts). */
+  PRINT_HUB: DurableObjectNamespace;
   AUTH_LIMITER?: { limit(o: { key: string }): Promise<{ success: boolean }> };
   PUBLIC_LIMITER?: { limit(o: { key: string }): Promise<{ success: boolean }> };
 };

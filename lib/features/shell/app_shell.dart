@@ -5,6 +5,7 @@ import 'package:go_router/go_router.dart';
 import '../../core/theme.dart';
 import '../../core/widgets.dart';
 import '../auth/auth_controller.dart';
+import '../printing/print_station.dart';
 import '../../core/layout.dart';
 
 class _Dest {
@@ -29,7 +30,15 @@ class AppShell extends ConsumerWidget {
   @override
   Widget build(BuildContext context, WidgetRef ref) {
     final me = ref.watch(authProvider).value;
-    final dests = [_home, _attendance, _register, if (me?.isCoordinator ?? false) _calls, if (me?.isAdmin ?? false) _people, if (me?.isAdmin ?? false) _admin];
+    ref.watch(printStationProvider); // becomes the printing phone for everyone while this phone is connected to the printer
+    final dests = [
+      _home,
+      _attendance,
+      _register,
+      if (me?.isCoordinator ?? false) _calls,
+      if (me?.isAdmin ?? false) _people,
+      if (me?.isAdmin ?? false) _admin,
+    ];
     var index = dests.lastIndexWhere((d) => d.route == '/' ? location == '/' : location.startsWith(d.route));
     if (index < 0) index = 0;
     final title = dests[index].label;

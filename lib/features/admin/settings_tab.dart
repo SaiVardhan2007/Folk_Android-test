@@ -255,7 +255,14 @@ class _ReceiptEditorState extends ConsumerState<_ReceiptEditor> {
 
   ReceiptFormat get _format => ReceiptFormat(text: _text.text.trim(), showLogo: _logo);
 
-  static const _sample = ReceiptData(name: 'Sample Name', mob: '9876543210', event: 'Saturday Satsang', ts: '2026-11-21 17:45:00', count: 3, markedBy: 'Volunteer');
+  static const _sample = ReceiptData(
+    name: 'Sample Name',
+    mob: '9876543210',
+    event: 'Saturday Satsang',
+    ts: '2026-11-21 17:45:00',
+    count: 3,
+    markedBy: 'Volunteer',
+  );
 
   /// Puts `s` where the cursor is (or at the end).
   void _insert(String s) {
@@ -263,7 +270,10 @@ class _ReceiptEditorState extends ConsumerState<_ReceiptEditor> {
     final sel = _text.selection;
     final start = sel.isValid ? sel.start : t.length;
     final end = sel.isValid ? sel.end : t.length;
-    _text.value = TextEditingValue(text: t.replaceRange(start, end, s), selection: TextSelection.collapsed(offset: start + s.length));
+    _text.value = TextEditingValue(
+      text: t.replaceRange(start, end, s),
+      selection: TextSelection.collapsed(offset: start + s.length),
+    );
   }
 
   Future<void> _save() async {
@@ -290,7 +300,10 @@ class _ReceiptEditorState extends ConsumerState<_ReceiptEditor> {
         builder: (d) => AlertDialog(
           title: const Text('How it will print'),
           content: SingleChildScrollView(
-            child: Container(color: Colors.white, child: RawImage(image: image, width: 384, fit: BoxFit.fitWidth)),
+            child: Container(
+              color: Colors.white,
+              child: RawImage(image: image, width: 384, fit: BoxFit.fitWidth),
+            ),
           ),
           actions: [TextButton(onPressed: () => Navigator.pop(d), child: const Text('Close'))],
         ),
@@ -329,9 +342,7 @@ class _ReceiptEditorState extends ConsumerState<_ReceiptEditor> {
             Wrap(
               spacing: 8,
               runSpacing: 4,
-              children: [
-                for (final f in kReceiptFields) ActionChip(label: Text(f.label), onPressed: () => _insert('{${f.key}}')),
-              ],
+              children: [for (final f in kReceiptFields) ActionChip(label: Text(f.label), onPressed: () => _insert('{${f.key}}'))],
             ),
             const SizedBox(height: kGapM),
             TextField(
@@ -350,7 +361,12 @@ class _ReceiptEditorState extends ConsumerState<_ReceiptEditor> {
               'A line is left out when all its fields are empty.',
               style: text.bodyMedium,
             ),
-            SwitchListTile(contentPadding: EdgeInsets.zero, value: _logo, onChanged: (v) => setState(() => _logo = v), title: const Text('Print the FOLK logo at the top')),
+            SwitchListTile(
+              contentPadding: EdgeInsets.zero,
+              value: _logo,
+              onChanged: (v) => setState(() => _logo = v),
+              title: const Text('Print the FOLK logo at the top'),
+            ),
             const SizedBox(height: kGapS),
             FilledButton.icon(onPressed: _busy ? null : _save, icon: const Icon(Icons.save_outlined), label: const Text('Save receipt format')),
             const SizedBox(height: kGapS),

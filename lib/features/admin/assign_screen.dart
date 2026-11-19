@@ -443,7 +443,10 @@ class _AssignScreenState extends ConsumerState<AssignScreen> {
             if (n('candidates') > n('assignable') + n('unassigned'))
               Text('${n('candidates')} matched, limited to ${n('assignable') + n('unassigned')}.', style: text.bodyMedium),
             if (_mode == 'previous' && _scope != 'others' && n('assignable') > 0) ...[
-              Text('${n('kept_with_previous')} go back to the same coordinator', style: text.bodyMedium),
+              Text(
+                '${n('kept_with_previous')} go back to the coordinator who had them before (only while that coordinator is under their limit)',
+                style: text.bodyMedium,
+              ),
               Text('${n('shared_out')} are shared equally', style: text.bodyMedium),
             ],
             if (n('unassigned') > 0)
@@ -455,7 +458,11 @@ class _AssignScreenState extends ConsumerState<AssignScreen> {
             ],
             const SizedBox(height: kGapS),
             Text('Given to', style: text.titleSmall),
-            for (final c in (p['per_coordinator'] as List)) Text('${c['name']}: +${c['add']}  (total ${c['total_after']})', style: text.bodyMedium),
+            for (final c in (p['per_coordinator'] as List))
+              Text(
+                '${c['name']}: +${c['add']}  (total ${c['total_after']}, ${c['limit'] == null ? 'NO LIMIT' : 'limit ${c['limit']}'})',
+                style: text.bodyMedium?.copyWith(color: c['limit'] == null ? context.colors.warning : null),
+              ),
             if (n('assignable') == 0 && n('unassigned') == 0) ...[
               const SizedBox(height: kGapS),
               Text('No contacts match these choices.', style: text.bodyMedium),

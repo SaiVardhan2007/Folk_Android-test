@@ -15,8 +15,18 @@ const kReceiptFields = <({String key, String label})>[
 /// A line starting with `# ` is printed big and bold, `## ` bold, `~ ` centred, and `---` draws a dotted line.
 /// A line whose fields are all empty (for example `Phone: {phone}` for someone with no phone) is left out.
 class ReceiptFormat {
-  const ReceiptFormat({this.text = '', this.showLogo = true, this.title = 'FOLK', this.subtitle = 'Attendance Receipt', this.footer = 'Hare Krishna!',
-    this.showEvent = true, this.showPhone = true, this.showTime = true, this.showCount = true, this.showMarkedBy = false});
+  const ReceiptFormat({
+    this.text = '',
+    this.showLogo = true,
+    this.title = 'FOLK',
+    this.subtitle = 'Attendance Receipt',
+    this.footer = 'Hare Krishna!',
+    this.showEvent = true,
+    this.showPhone = true,
+    this.showTime = true,
+    this.showCount = true,
+    this.showMarkedBy = false,
+  });
 
   /// The typed receipt. Empty = use [layout] built from the older settings below.
   final String text;

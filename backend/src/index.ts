@@ -369,7 +369,7 @@ const isStaff = (s: Session) => s.tag === "Admin" || s.tag === "Coordinator";
 const needAdmin = (c: Ctx) => { if (!isAdmin(c.get("session"))) throw new HttpError(403, "Admin access required."); };
 const needStaff = (c: Ctx) => { if (!isStaff(c.get("session"))) throw new HttpError(403, "Not allowed."); };
 
-for (const p of ["/me", "/bootstrap", "/events", "/home", "/people", "/people/*", "/attendance", "/attendance/*", "/my/*", "/registrations", "/admin/*", "/reports/*"]) app.use(p, requireSession);
+for (const p of ["/me", "/bootstrap", "/events", "/home", "/people", "/people/*", "/attendance", "/attendance/*", "/my/*", "/print/jobs", "/registrations", "/admin/*", "/reports/*"]) app.use(p, requireSession);
 
 // ---------- app update notice (public: a phone must learn it is out of date even before sign-in)
 /** Phones are given OUR address for the APK (not the host's own link), so the Update button never opens another app such as GitHub's, which asks to sign in. */
@@ -1900,4 +1900,38 @@ async function notifyAssigned(_c: Ctx, added: Map<string, number>) {
   for (const [id, n] of added) console.log(`assigned ${n} contact(s) to ${id}`);
 }
 
-export default app;
+// ---------- receipt printing: any phone sends a receipt to the shared queue; a phone connected to the printer prints it (see printHub.ts)
+export { PrintHub } from "./printHub";
+const hubOf = (env: Bindings) => env.PRINT_HUB.get(env.PRINT_HUB.idFromName("main"));
+
+app.post("/print/jobs", async (c) => {
+  staffOnly(c);
+  const s = c.get("session");
+  const b = await body(c);
+  const key = clean(b.key, 64);
+  const mob = normalizeMobile(b.mob);
+  if (key.length < 8) throw bad("Invalid request.");
+  if (!mob) throw bad("Enter a valid 10-digit mobile number.");
+  const ts = typeof b.ts === "string" && TS_RE.test(b.ts) ? b.ts : istNow();
+  const count = Math.min(Math.max(Math.floor(Number(b.count)) || 0, 0), 9999);
+  const data = { name: clean(b.name), mob, event: clean(b.event, 100), ts, count, marked_by: s.name };
+  const r = await hubOf(c.env).fetch("https://hub/enqueue", { method: "POST", body: JSON.stringify({ key, data }) });
+  return c.json({ queued: true, ...((await r.json()) as { stations: number }) });
+});
+
+/** The station connection is a WebSocket, so it is answered here (before the normal routes) after checking the sign-in. */
+async function stationSocket(req: Request, env: Bindings): Promise<Response> {
+  const h = req.headers.get("Authorization") ?? "";
+  const payload = h.startsWith("Bearer ") ? await verifyToken(h.slice(7), env.JWT_SECRET) : null;
+  if (!payload || typeof payload.sub !== "string" || payload.purpose) return new Response("Please sign in again.", { status: 401 });
+  const row = await getById(new Erp(env), payload.sub);
+  if (!row || row.is_active === 0 || !isStaffRow(row)) return new Response("Not allowed.", { status: 403 });
+  return hubOf(env).fetch(new Request("https://hub/station", req));
+}
+
+export default {
+  fetch(req: Request, env: Bindings, ctx: ExecutionContext): Response | Promise<Response> {
+    if (req.headers.get("Upgrade") === "websocket" && new URL(req.url).pathname === "/print/station") return stationSocket(req, env);
+    return app.fetch(req, env, ctx);
+  },
+};
