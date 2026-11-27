@@ -59,7 +59,9 @@ run git tag "$TAG"
 run git push "$(git config branch.main.remote)" main "$TAG"   # the remote main tracks (devshare)
 
 # 7. GitHub release with a fixed file name, so the download link never changes
-run gh release create "$TAG" "$APK#FOLK-Tracker.apk" --repo "$RELEASES_REPO" --title "FOLK Tracker $NEW_NAME" --notes "$MSG"
+# ("file#Name" only sets a display label in gh, so the file itself must be called FOLK-Tracker.apk)
+REL_DIR=$(mktemp -d); run cp "$APK" "$REL_DIR/FOLK-Tracker.apk"
+run gh release create "$TAG" "$REL_DIR/FOLK-Tracker.apk" --repo "$RELEASES_REPO" --title "FOLK Tracker $NEW_NAME" --notes "$MSG"
 
 # 8. Last: tell the phones. They see "Update available" when the app next opens or returns to the foreground.
 run bash -c "cd backend && python3 -I scripts/publish_update.py $NEW_BUILD \"\$0\" $MIN" "$MSG"
