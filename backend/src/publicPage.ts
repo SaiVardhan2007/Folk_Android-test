@@ -15,6 +15,7 @@ export type PageConfig = {
   occupations: string[];
   /** College / Company values people can pick (the form adds "Others" at the bottom; it cannot add new values). */
   colleges: { value: string; label: string }[];
+  areas: { value: string; label: string }[];
 };
 
 /** JSON that is safe inside a <script type="application/json"> block. */
@@ -169,7 +170,7 @@ const SCRIPT = `
         C.type === 'Feedback' ? null : field('Gender *', select('gender', C.genders)),
         C.type === 'Feedback' ? null : field('Occupation', select('occupation', C.occupations)),
         C.type === 'Feedback' ? null : field('College / Company', select('college_id', (C.colleges || []).concat([{value:'other', label:'Others'}]))),
-        C.type === 'Feedback' ? null : field('Area you stay in', el('input', {id:'venue', type:'text', maxlength:'120'}))
+        C.type === 'Feedback' ? null : field('Area you stay in', select('area_id', (C.areas || []).concat([{value:'other', label:'Others'}])))
       ]));
     }
     var q = [];
@@ -204,7 +205,7 @@ const SCRIPT = `
       e.preventDefault(); err.textContent = '';
       var body = { mob: state.mob, website: val('website'), waited: Date.now() - state.started };
       if (!state.found) {
-        body.name = val('name'); body.gender = val('gender'); body.occupation = val('occupation'); body.college_id = val('college_id'); body.venue = val('venue');
+        body.name = val('name'); body.gender = val('gender'); body.occupation = val('occupation'); body.college_id = val('college_id'); body.area_id = val('area_id');
         if (!body.name) { err.textContent = 'Please enter your name.'; return; }
         if (C.type !== 'Feedback' && !body.gender) { err.textContent = 'Please choose your gender.'; return; }
       }

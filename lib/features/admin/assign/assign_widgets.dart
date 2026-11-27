@@ -1,7 +1,6 @@
 import 'dart:async';
 
 import 'package:flutter/material.dart';
-import 'package:flutter/services.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import '../../../core/api.dart';
@@ -57,7 +56,7 @@ class FilterEditor extends ConsumerStatefulWidget {
 }
 
 class _FilterEditorState extends ConsumerState<FilterEditor> {
-  int? _total, _poolTotal;
+  int? _total, _poolTotal, _remaining, _assigned;
   String? _error;
   Timer? _timer;
 
@@ -92,6 +91,8 @@ class _FilterEditorState extends ConsumerState<FilterEditor> {
         setState(() {
           _total = (r['total'] as num).toInt();
           _poolTotal = (p['total'] as num).toInt();
+          _remaining = (r['remaining'] as num?)?.toInt();
+          _assigned = (r['assigned'] as num?)?.toInt();
           _error = null;
         });
       } on ApiException catch (e) {
@@ -142,6 +143,11 @@ class _FilterEditorState extends ConsumerState<FilterEditor> {
                 : Column(
                     crossAxisAlignment: CrossAxisAlignment.start,
                     children: [
+                      if (widget.poolBody['kind'] == 'assign' && _remaining != null) ...[
+                        if (_assigned != null) Text('$_assigned contacts already assigned', style: text.titleMedium),
+                        Text('$_remaining contacts not assigned yet', style: text.titleMedium),
+                        const SizedBox(height: kGapXS),
+                      ],
                       Text('$total contacts match', style: text.headlineSmall),
                       if (widget.outer.isNotEmpty || widget.filters.isNotEmpty)
                         Text('${percent(total, _poolTotal ?? total)} of ${_poolTotal ?? total}', style: text.bodyLarge),
@@ -270,20 +276,24 @@ class _BreakdownSheetState extends ConsumerState<_BreakdownSheet> {
                         onChanged: (v) => setState(() => _search = v),
                       ),
                     ),
+                  ],
+                ),
+                Row(
+                  children: [
                     TextButton(
-                      onPressed: d == null
+                      onPressed: d == null || allTicked
                           ? null
                           : () => setState(() {
-                              if (allTicked) {
-                                _ticked.clear();
-                              } else {
-                                for (final r in every) {
-                                  _ticked[r.id] = r.title;
-                                }
+                              for (final r in every) {
+                                _ticked[r.id] = r.title;
                               }
                             }),
-                      child: Text(allTicked ? 'Clear' : 'Select all'),
+                      child: const Text('Select all'),
                     ),
+                    // Untick everything in one tap, so a single value can be picked out of a long list.
+                    TextButton(onPressed: d == null || _ticked.isEmpty ? null : () => setState(_ticked.clear), child: const Text('Clear all')),
+                    const Spacer(),
+                    if (_ticked.isNotEmpty) Text('${_ticked.length} selected', style: text.bodyMedium),
                   ],
                 ),
               ],
@@ -340,19 +350,30 @@ class _BreakdownSheetState extends ConsumerState<_BreakdownSheet> {
   }
 }
 
-/// Pick coordinators and give each a Minimum and a Maximum for this assignment. Women are never offered.
+/// Pick the coordinators who receive the contacts. Women and switched-off coordinators are never offered. Each row shows the
+/// coordinator's call limit and how many they already hold, so the room left is visible before anything is assigned.
 class CoordinatorPicker extends StatelessWidget {
-  const CoordinatorPicker({super.key, required this.callers, required this.group, this.exclude = const {}, required this.onChanged});
+  const CoordinatorPicker({
+    super.key,
+    required this.callers,
+    required this.picked,
+    this.exclude = const {},
+    required this.onChanged,
+    this.onEditLimit,
+  });
   final List<Map<String, dynamic>> callers;
-  final GroupDraft group;
+  final Set<String> picked;
   final Set<String> exclude;
   final VoidCallback onChanged;
+
+  /// When given, each row gets a small edit button to change that coordinator's max.
+  final void Function(Map<String, dynamic> coordinator)? onEditLimit;
 
   @override
   Widget build(BuildContext context) {
     final receivers = [
       for (final c in callers)
-        if (c['gender'] != 'F' && !exclude.contains('${c['mob']}')) c,
+        if (c['gender'] != 'F' && c['enabled'] != false && !exclude.contains('${c['mob']}')) c,
     ];
     return Column(
       crossAxisAlignment: CrossAxisAlignment.start,
@@ -361,16 +382,14 @@ class CoordinatorPicker extends StatelessWidget {
           children: [
             TextButton(
               onPressed: () {
-                for (final c in receivers) {
-                  group.coords.putIfAbsent('${c['mob']}', () => CoordPick('${c['mob']}', '${c['name']}'));
-                }
+                picked.addAll([for (final c in receivers) '${c['mob']}']);
                 onChanged();
               },
               child: const Text('Select all'),
             ),
             TextButton(
               onPressed: () {
-                group.coords.clear();
+                picked.clear();
                 onChanged();
               },
               child: const Text('Clear'),
@@ -385,66 +404,68 @@ class CoordinatorPicker extends StatelessWidget {
 
   Widget _row(BuildContext context, Map<String, dynamic> c) {
     final mob = '${c['mob']}';
-    final pick = group.coords[mob];
-    final nums = FilteringTextInputFormatter.digitsOnly;
+    final limit = (c['call_limit'] as num?)?.toInt();
+    final has = (c['assigned'] as num?)?.toInt() ?? 0;
+    final room = limit == null ? null : (limit - has).clamp(0, limit);
+    final full = room == 0;
     return Card(
-      child: Padding(
-        padding: const EdgeInsets.symmetric(horizontal: kGapM),
-        child: Column(
-          children: [
-            CheckboxListTile(
-              contentPadding: EdgeInsets.zero,
-              value: pick != null,
-              title: Text('${c['name']}'),
-              subtitle: Text('Waiting ${c['pending']}  •  Total ${c['assigned']}'),
-              onChanged: (v) {
-                if (v == true) {
-                  group.coords[mob] = CoordPick(mob, '${c['name']}');
-                } else {
-                  group.coords.remove(mob);
-                }
-                onChanged();
-              },
-            ),
-            if (pick != null)
-              Padding(
-                padding: const EdgeInsets.only(bottom: kGapM),
-                child: Row(
-                  children: [
-                    Expanded(
-                      child: TextFormField(
-                        key: ValueKey('min$mob'),
-                        initialValue: pick.min == 0 ? '' : '${pick.min}',
-                        keyboardType: TextInputType.number,
-                        inputFormatters: [nums, LengthLimitingTextInputFormatter(5)],
-                        decoration: const InputDecoration(labelText: 'Minimum'),
-                        onChanged: (v) {
-                          pick.min = int.tryParse(v) ?? 0;
-                          onChanged();
-                        },
-                      ),
-                    ),
-                    const SizedBox(width: kGapM),
-                    Expanded(
-                      child: TextFormField(
-                        key: ValueKey('max$mob'),
-                        initialValue: pick.max == null ? '' : '${pick.max}',
-                        keyboardType: TextInputType.number,
-                        inputFormatters: [nums, LengthLimitingTextInputFormatter(5)],
-                        decoration: const InputDecoration(labelText: 'Maximum', hintText: 'No limit'),
-                        onChanged: (v) {
-                          final n = int.tryParse(v);
-                          pick.max = (n == null || n == 0) ? null : n;
-                          onChanged();
-                        },
-                      ),
-                    ),
-                  ],
-                ),
-              ),
-          ],
+      child: CheckboxListTile(
+        value: picked.contains(mob),
+        title: Text('${c['name']}'),
+        subtitle: Text(
+          limit == null ? 'No limit  •  Already has $has' : 'Max $limit  •  Already has $has  •  Room for $room more',
+          style: TextStyle(color: full ? context.colors.warning : null),
         ),
+        secondary: onEditLimit == null
+            ? null
+            : IconButton(tooltip: 'Change max', icon: const Icon(Icons.edit_outlined), onPressed: () => onEditLimit!(c)),
+        onChanged: (v) {
+          v == true ? picked.add(mob) : picked.remove(mob);
+          onChanged();
+        },
       ),
     );
   }
+}
+
+/// The bottom bar of every wizard screen: Back on the left, the main action on the right.
+class WizardBar extends StatelessWidget {
+  const WizardBar({super.key, this.onBack, required this.nextLabel, required this.onNext, this.note});
+  final VoidCallback? onBack, onNext;
+  final String nextLabel;
+  final String? note;
+  @override
+  Widget build(BuildContext context) => Material(
+    elevation: 8,
+    color: Theme.of(context).colorScheme.surface,
+    child: SafeArea(
+      child: Padding(
+        padding: const EdgeInsets.fromLTRB(kPagePadding, kGapM, kPagePadding, kGapM),
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            if (note != null)
+              Padding(
+                padding: const EdgeInsets.only(bottom: kGapS),
+                child: Text(note!, style: Theme.of(context).textTheme.bodyMedium),
+              ),
+            Row(
+              children: [
+                if (onBack != null) ...[
+                  Expanded(
+                    child: OutlinedButton(onPressed: onBack, child: const Text('Back')),
+                  ),
+                  const SizedBox(width: kGapM),
+                ],
+                Expanded(
+                  flex: 2,
+                  child: FilledButton(onPressed: onNext, child: Text(nextLabel)),
+                ),
+              ],
+            ),
+          ],
+        ),
+      ),
+    ),
+  );
 }

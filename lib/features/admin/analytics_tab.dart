@@ -55,7 +55,7 @@ class _AnalyticsTabState extends ConsumerState<AnalyticsTab> with AutomaticKeepA
               ChoiceChip(label: Text(r.value), selected: _range == r.key, onSelected: (_) => setState(() => _range = r.key)),
           ],
         ),
-        const SizedBox(height: 12),
+        const SizedBox(height: 10),
         FieldGrid(
           children: [
             OptionDropdown(
@@ -78,7 +78,7 @@ class _AnalyticsTabState extends ConsumerState<AnalyticsTab> with AutomaticKeepA
         const SizedBox(height: 8),
         data.when(
           loading: () => const Padding(
-            padding: EdgeInsets.all(48),
+            padding: EdgeInsets.all(24),
             child: Center(child: CircularProgressIndicator()),
           ),
           error: (e, _) =>

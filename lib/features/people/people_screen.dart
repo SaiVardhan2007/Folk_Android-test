@@ -14,8 +14,8 @@ import '../admin/admin_repo.dart';
 import '../auth/auth_controller.dart';
 import '../calls/calls_screen.dart' show HistorySheet;
 import '../register/person_form.dart';
-
-const _sorts = {'newest': 'Newest first', 'oldest': 'Oldest first', 'name': 'Name A–Z', 'most': 'Most attended', 'recent': 'Recently attended'};
+import '../../core/options.dart';
+import 'people_filters.dart';
 
 /// One column of the people table. All widths in one place.
 class _Col {
@@ -33,6 +33,7 @@ const _cAge = _Col('Age', 70);
 const _cOcc = _Col('Occupation', 130);
 const _cCompany = _Col('Company / College', 190);
 const _cPg = _Col('PG / Residence', 170);
+const _cArea = _Col('Area of stay', 150);
 const _cStay = _Col('Staying', 140);
 const _cGuide = _Col('FOLK Guide', 130);
 const _cCalls = _Col('Calls', 90);
@@ -50,6 +51,7 @@ const _columns = [
   _cOcc,
   _cCompany,
   _cPg,
+  _cArea,
   _cStay,
   _cGuide,
   _cCalls,
@@ -156,9 +158,9 @@ class _PeopleScreenState extends ConsumerState<PeopleScreen> with AutomaticKeepA
       context: context,
       isScrollControlled: true,
       showDragHandle: true,
-      builder: (c) => _FilterSheet(initial: _filters, boot: boot),
+      builder: (c) => PeopleFilterSheet(initial: _filters, boot: boot),
     );
-    if (result != null) _apply({..._filters, ...result, 'q': _search.text.trim()});
+    if (result != null) _apply({...result, 'q': _search.text.trim()});
   }
 
   Future<void> _manage(Person p) async {
@@ -177,6 +179,29 @@ class _PeopleScreenState extends ConsumerState<PeopleScreen> with AutomaticKeepA
     showDragHandle: true,
     builder: (c) => HistorySheet(mob: p.mob, name: p.name, calls: calls),
   );
+
+  /// The filters that are on, each as a chip that removes it; "Clear all" when there is more than one.
+  Widget _activeChips() {
+    final chips = describeFilters(_filters, ref.watch(optionsProvider).value ?? const OptionLists(), ref.watch(bootstrapProvider).value);
+    if (chips.isEmpty) return const SizedBox.shrink();
+    return Padding(
+      padding: const EdgeInsets.only(bottom: 8),
+      child: Wrap(
+        spacing: 8,
+        runSpacing: 4,
+        children: [
+          for (final c in chips)
+            InputChip(label: Text(c.text), onDeleted: () => _apply({...withoutFilter(_filters, c.keys), 'q': _search.text.trim()})),
+          if (chips.length > 1)
+            ActionChip(
+              avatar: const Icon(Icons.clear_all, size: 18),
+              label: const Text('Clear all'),
+              onPressed: () => _apply({'sort': _filters['sort'] ?? 'newest', 'q': _search.text.trim()}),
+            ),
+        ],
+      ),
+    );
+  }
 
   Widget _count(int n, VoidCallback onTap) => FilledButton.tonal(
     onPressed: onTap,
@@ -225,6 +250,7 @@ class _PeopleScreenState extends ConsumerState<PeopleScreen> with AutomaticKeepA
               plain(_cOcc, p.occupation),
               plain(_cCompany, p.profession),
               plain(_cPg, p.pgName),
+              plain(_cArea, p.areaName),
               plain(_cStay, p.currentStay),
               plain(_cGuide, p.guide),
               cell(_cCalls, _count(p.callsCount, () => _history(p, calls: true))),
@@ -275,7 +301,8 @@ class _PeopleScreenState extends ConsumerState<PeopleScreen> with AutomaticKeepA
                 ],
               ),
               const SizedBox(height: 10),
-              Text('$_total ${_total == 1 ? 'person' : 'people'}  •  ${_sorts[_filters['sort']] ?? ''}', style: text.bodyMedium),
+              _activeChips(),
+              Text('$_total ${_total == 1 ? 'person' : 'people'}  •  ${kSorts[_filters['sort']] ?? ''}', style: text.bodyMedium),
               const SizedBox(height: 8),
               if (_error != null) ErrorView(message: _error!, onRetry: () => _load(reset: true)),
             ],
@@ -318,7 +345,7 @@ class _PeopleScreenState extends ConsumerState<PeopleScreen> with AutomaticKeepA
                               }
                               if (_items.isEmpty && _error == null) {
                                 return Padding(
-                                  padding: const EdgeInsets.all(32),
+                                  padding: const EdgeInsets.all(20),
                                   child: Text('No one found.', style: text.bodyLarge),
                                 );
                               }
@@ -333,94 +360,6 @@ class _PeopleScreenState extends ConsumerState<PeopleScreen> with AutomaticKeepA
               ),
             ),
           ),
-        ),
-      ],
-    );
-  }
-}
-
-class _FilterSheet extends StatefulWidget {
-  const _FilterSheet({required this.initial, required this.boot});
-  final Map<String, String> initial;
-  final Bootstrap? boot;
-  @override
-  State<_FilterSheet> createState() => _FilterSheetState();
-}
-
-class _FilterSheetState extends State<_FilterSheet> {
-  late final Map<String, String> f = {...widget.initial};
-
-  @override
-  Widget build(BuildContext context) {
-    final b = widget.boot;
-    return SheetBody(
-      children: [
-        Text('Filters and sort', style: Theme.of(context).textTheme.titleLarge),
-        const SizedBox(height: 14),
-        FieldGrid(
-          children: [
-            OptionDropdown(
-              label: 'Sort by',
-              value: f['sort'] ?? 'newest',
-              options: _sorts.keys.toList(),
-              labelOf: (v) => _sorts[v]!,
-              allowNone: false,
-              onChanged: (v) => setState(() => f['sort'] = v),
-            ),
-            OptionDropdown(label: 'Role', value: f['tag'] ?? '', options: b?.tags ?? const [], onChanged: (v) => setState(() => f['tag'] = v)),
-            OptionDropdown(label: 'Level', value: f['level'] ?? '', options: b?.levels ?? const [], onChanged: (v) => setState(() => f['level'] = v)),
-            OptionDropdown(
-              label: 'Gender',
-              value: f['gender'] ?? '',
-              options: const ['M', 'F'],
-              labelOf: genderLabel,
-              onChanged: (v) => setState(() => f['gender'] = v),
-            ),
-            OptionDropdown(
-              label: 'Registered event',
-              value: f['event'] ?? '',
-              options: [for (final e in b?.eventsAndLists ?? <FolkEvent>[]) e.code],
-              labelOf: (c) => b!.eventsAndLists.firstWhere((e) => e.code == c).name,
-              onChanged: (v) => setState(() => f['event'] = v),
-            ),
-            OptionDropdown(
-              label: 'Approval',
-              value: f['pending'] ?? '',
-              options: const ['1'],
-              labelOf: (_) => 'Awaiting approval',
-              onChanged: (v) => setState(() => f['pending'] = v),
-            ),
-            OptionDropdown(
-              label: 'Attendance',
-              value: f['att'] ?? '',
-              options: const ['yes', 'no'],
-              labelOf: (v) => v == 'yes' ? 'Has attended' : 'Never attended',
-              onChanged: (v) => setState(() => f['att'] = v),
-            ),
-          ],
-        ),
-        const SizedBox(height: 18),
-        Row(
-          children: [
-            Expanded(
-              child: OutlinedButton(
-                onPressed: () => Navigator.pop(context, <String, String>{
-                  'sort': 'newest',
-                  'tag': '',
-                  'level': '',
-                  'gender': '',
-                  'event': '',
-                  'att': '',
-                  'pending': '',
-                }),
-                child: const Text('Clear all'),
-              ),
-            ),
-            const SizedBox(width: 12),
-            Expanded(
-              child: FilledButton(onPressed: () => Navigator.pop(context, f), child: const Text('Apply')),
-            ),
-          ],
         ),
       ],
     );

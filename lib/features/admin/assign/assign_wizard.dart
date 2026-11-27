@@ -1,6 +1,8 @@
 import 'dart:async';
+import 'dart:convert';
 
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import '../../../core/api.dart';
@@ -10,7 +12,6 @@ import '../../../core/widgets.dart';
 import '../admin_repo.dart';
 import 'assign_models.dart';
 import 'assign_widgets.dart';
-import 'group_editor.dart';
 
 typedef _Callers = ({List<Map<String, dynamic>> callers, List<String> statuses});
 final _callersProvider = FutureProvider.autoDispose.family<_Callers, String>((ref, event) => ref.read(adminRepoProvider).callers(event: event));
@@ -18,11 +19,14 @@ final _callersProvider = FutureProvider.autoDispose.family<_Callers, String>((re
 /// Admin → Calls → Assign calls. A step-by-step wizard: one question per screen, a Review before anything is saved,
 /// then the plan is written in small repeatable batches. There is no way to jump around in the middle.
 class AssignWizard extends ConsumerStatefulWidget {
-  const AssignWizard({super.key, required this.event, required this.eventName, this.reassignUnstarted = false});
+  const AssignWizard({super.key, required this.event, required this.eventName, this.reassignUnstarted = false, this.moveFromMob});
   final String event, eventName;
 
   /// "Reassign Unstarted": skips the start screen and moves every call nobody has made to the coordinators picked.
   final bool reassignUnstarted;
+
+  /// Opens "Move a coordinator's calls" with this coordinator already ticked (used when switching a coordinator off).
+  final String? moveFromMob;
   @override
   ConsumerState<AssignWizard> createState() => _AssignWizardState();
 }
@@ -31,9 +35,9 @@ enum _Phase { edit, saving, done }
 
 class _AssignWizardState extends ConsumerState<AssignWizard> {
   late final AssignDraft _d = AssignDraft(widget.event)
-    ..kind = widget.reassignUnstarted ? AssignKind.move : null
+    ..kind = widget.reassignUnstarted || widget.moveFromMob != null ? AssignKind.move : null
     ..all = widget.reassignUnstarted;
-  int _i = 0;
+  late int _i = widget.moveFromMob == null ? 0 : 1;
   _Phase _phase = _Phase.edit;
 
   Map<String, dynamic>? _plan;
@@ -41,14 +45,26 @@ class _AssignWizardState extends ConsumerState<AssignWizard> {
   String? _planError, _saveError;
   List<Map<String, dynamic>> _batches = const [];
   final Set<int> _finished = {};
-  List<String> _release = const [];
-  Map<String, dynamic>? _sizes;
-  int _released = 0, _done = 0, _skipped = 0, _total = 0;
+  Timer? _planTimer;
+  int _done = 0, _skipped = 0, _total = 0;
   final Map<String, int> _added = {}; // contacts added per coordinator, sent once at the end so each coordinator gets one notification
 
   List<AssignStep> get _steps => stepsFor(_d.kind, reassign: widget.reassignUnstarted);
   AssignStep get _step => _steps[_i];
   bool get _busy => _phase == _Phase.saving;
+
+  @override
+  void initState() {
+    super.initState();
+    final m = widget.moveFromMob;
+    if (m != null) _d.from.add(m);
+  }
+
+  @override
+  void dispose() {
+    _planTimer?.cancel();
+    super.dispose();
+  }
 
   /// 1 when the first step is the start screen (not counted as a step).
   int get _first => _steps.first == AssignStep.start ? 1 : 0;
@@ -59,31 +75,24 @@ class _AssignWizardState extends ConsumerState<AssignWizard> {
       _plan = null;
       _planError = null;
     });
-    if (_step == AssignStep.review) _makePlan();
-    if (_step == AssignStep.groups) _loadSizes();
+    if (_step == AssignStep.coordinators) _makePlan();
   }
 
-  /// How many contacts each group holds, and whether two groups share contacts. Numbers only.
-  Future<void> _loadSizes() async {
-    try {
-      final r = await ref.read(adminRepoProvider).assignGroupSizes(_d.planBody());
-      if (mounted && _step == AssignStep.groups) setState(() => _sizes = r);
-    } on ApiException {
-      if (mounted) setState(() => _sizes = null);
-    }
-  }
-
-  /// Any change to the choices invalidates the plan, so what is saved is always what was reviewed.
+  /// Any change to the choices invalidates the plan, so what is saved is always what was shown. The new plan is asked for
+  /// shortly after the last change, never once per keystroke.
   void _touch() {
     setState(() {
       _plan = null;
       _planError = null;
-      _sizes = null;
     });
-    if (_step == AssignStep.groups) _loadSizes();
+    if (_step != AssignStep.coordinators) return;
+    _planTimer?.cancel();
+    if (_d.coords.isEmpty) return;
+    _planTimer = Timer(const Duration(milliseconds: 400), _makePlan);
   }
 
   Future<void> _makePlan() async {
+    if (_d.coords.isEmpty) return;
     setState(() => _planning = true);
     try {
       final r = await ref.read(adminRepoProvider).planAssign(_d.planBody());
@@ -91,9 +100,8 @@ class _AssignWizardState extends ConsumerState<AssignWizard> {
       setState(() {
         _plan = r;
         _batches = makeBatches(r);
-        _release = [for (final x in (r['release'] as List)) '$x'];
         _finished.clear();
-        _released = _done = _skipped = 0;
+        _done = _skipped = 0;
         _added.clear();
         _total = _batches.fold(0, (t, b) => t + (b['persons'] as List).length);
       });
@@ -115,7 +123,7 @@ class _AssignWizardState extends ConsumerState<AssignWizard> {
     }
   }
 
-  /// Writes every batch that is not finished yet, then removes the replaced calls. Safe to run again after a failure.
+  /// Writes every batch that is not finished yet. Safe to run again after a failure.
   Future<void> _save() async {
     final plan = _plan;
     if (plan == null || _busy) return;
@@ -159,19 +167,6 @@ class _AssignWizardState extends ConsumerState<AssignWizard> {
           failure ??= e;
         }),
     ]);
-    // Only after every contact is saved are the replaced calls removed, so a failure never leaves anyone without a call.
-    if (failure == null) {
-      try {
-        while (_released < _release.length) {
-          final part = _release.sublist(_released, (_released + 100).clamp(0, _release.length));
-          await _retry(() async => {'removed': await repo.releaseAssign(widget.event, part)});
-          if (!mounted) return;
-          setState(() => _released += part.length);
-        }
-      } catch (e) {
-        failure = e;
-      }
-    }
     if (!mounted) return;
     if (failure != null) {
       final f = failure;
@@ -243,13 +238,9 @@ class _AssignWizardState extends ConsumerState<AssignWizard> {
         switch (_step) {
           AssignStep.start => _start(context, data),
           AssignStep.who => _who(),
-          AssignStep.groups => _groups(context, data),
           AssignStep.calls => _calls(context, data),
-          AssignStep.narrow => _narrow(),
-          AssignStep.coordinators => _coordinators(data),
           AssignStep.from => _from(data),
-          AssignStep.to => _to(data),
-          AssignStep.review => _review(context),
+          AssignStep.coordinators => _coordinators(context, data),
         },
         if (_saveError != null) ...[
           const SizedBox(height: kGapM),
@@ -297,118 +288,6 @@ class _AssignWizardState extends ConsumerState<AssignWizard> {
       FilterEditor(filters: _d.filters, poolBody: _d.poolBody(), onChanged: _touch),
     ],
   );
-
-  Widget _groups(BuildContext context, _Callers data) {
-    final text = Theme.of(context).textTheme;
-    final sizes = _sizes;
-    int? size(int n) => sizes == null ? null : ((sizes['sizes'] as List)[n] as num).toInt();
-    final overlaps = [for (final o in (sizes?['overlaps'] as List? ?? const [])) Map<String, dynamic>.from(o as Map)];
-    Future<void> edit(
-      GroupDraft g,
-      String title, {
-      required bool rest,
-      required void Function(GroupDraft) save,
-      List<GroupDraft> others = const [],
-    }) async {
-      final r = await Navigator.push<GroupDraft>(
-        context,
-        MaterialPageRoute(
-          builder: (_) => GroupEditorPage(group: g, title: title, rest: rest, draft: _d, callers: data.callers, others: others),
-        ),
-      );
-      if (r != null) {
-        save(r);
-        _touch();
-      }
-    }
-
-    String who(GroupDraft g) => g.leave
-        ? 'Left unassigned'
-        : g.coords.isEmpty
-        ? 'No coordinator yet'
-        : g.coords.values.map((c) => c.name).join(', ');
-    Widget card(
-      String title,
-      GroupDraft g, {
-      required bool rest,
-      required void Function(GroupDraft) save,
-      int? count,
-      List<GroupDraft> others = const [],
-      VoidCallback? onDelete,
-    }) => Card(
-      child: Padding(
-        padding: const EdgeInsets.all(kGapL),
-        child: Column(
-          crossAxisAlignment: CrossAxisAlignment.start,
-          children: [
-            Row(
-              children: [
-                Expanded(child: Text(title, style: text.titleMedium)),
-                if (count != null) Text('$count contacts', style: text.titleMedium),
-              ],
-            ),
-            const SizedBox(height: kGapXS),
-            if (!rest) Text(g.contactsText, style: text.bodyMedium),
-            Text('→ ${who(g)}', style: text.bodyLarge?.copyWith(color: g.ready ? null : context.colors.warning)),
-            Row(
-              children: [
-                TextButton.icon(
-                  onPressed: () => edit(g, title, rest: rest, save: save, others: others),
-                  icon: const Icon(Icons.edit_outlined),
-                  label: const Text('Edit'),
-                ),
-                if (onDelete != null) IconButton(tooltip: 'Remove', icon: const Icon(Icons.delete_outline), onPressed: onDelete),
-              ],
-            ),
-          ],
-        ),
-      ),
-    );
-
-    return Column(
-      crossAxisAlignment: CrossAxisAlignment.start,
-      children: [
-        const StepHeader(title: 'Who calls whom?'),
-        for (var n = 0; n < _d.groups.length; n++)
-          card(
-            'Group ${n + 1}',
-            _d.groups[n],
-            rest: false,
-            count: size(n),
-            save: (g) => _d.groups[n] = g,
-            others: [
-              for (var k = 0; k < _d.groups.length; k++)
-                if (k != n) _d.groups[k],
-            ],
-            onDelete: () {
-              _d.groups.removeAt(n);
-              _touch();
-            },
-          ),
-        for (final o in overlaps)
-          Padding(
-            padding: const EdgeInsets.only(bottom: kGapS),
-            child: StatusBanner(
-              icon: Icons.error_outline,
-              color: context.colors.danger,
-              text: 'Group ${(o['a'] as int) + 1} and Group ${(o['b'] as int) + 1} share ${o['count']} contacts. Edit one of them.',
-            ),
-          ),
-        card(
-          _d.groups.isEmpty ? 'All the contacts you chose' : 'Everyone else',
-          _d.rest,
-          rest: true,
-          count: sizes == null ? null : (sizes['rest'] as num).toInt(),
-          save: (g) => _d.rest = g,
-        ),
-        OutlinedButton.icon(
-          onPressed: () => edit(GroupDraft(), 'Group ${_d.groups.length + 1}', rest: false, save: _d.groups.add, others: List.of(_d.groups)),
-          icon: const Icon(Icons.add),
-          label: const Text('Add a group'),
-        ),
-      ],
-    );
-  }
 
   Widget _calls(BuildContext context, _Callers data) {
     final text = Theme.of(context).textTheme;
@@ -494,35 +373,16 @@ class _AssignWizardState extends ConsumerState<AssignWizard> {
               ),
           ],
         ),
+        const SizedBox(height: kGapL),
+        Text('Narrow it down (optional)', style: text.titleSmall),
+        const SizedBox(height: kGapS),
+        _filters(),
       ],
     );
   }
 
-  Widget _narrow() => Column(
-    crossAxisAlignment: CrossAxisAlignment.start,
-    children: [
-      const StepHeader(title: 'Narrow it down (optional)'),
-      FilterEditor(filters: _d.filters, poolBody: _d.poolBody(), onChanged: _touch),
-    ],
-  );
-
-  Widget _coordinators(_Callers data) => Column(
-    crossAxisAlignment: CrossAxisAlignment.start,
-    children: [
-      const StepHeader(title: 'Who should call them again?'),
-      SwitchListTile(
-        contentPadding: EdgeInsets.zero,
-        title: const Text('Same coordinator as before'),
-        value: _d.rest.keepPrevious,
-        onChanged: (v) {
-          _d.rest.keepPrevious = v;
-          _touch();
-        },
-      ),
-      const Divider(),
-      CoordinatorPicker(callers: data.callers, group: _d.rest, onChanged: _touch),
-    ],
-  );
+  /// The contact filters, recounted whenever what decides the pool changes (statuses, dates, whose calls).
+  Widget _filters() => FilterEditor(key: ValueKey(jsonEncode(_d.poolBody())), filters: _d.filters, poolBody: _d.poolBody(), onChanged: _touch);
 
   Widget _from(_Callers data) {
     final text = Theme.of(context).textTheme;
@@ -538,34 +398,96 @@ class _AssignWizardState extends ConsumerState<AssignWizard> {
             subtitle: Text('${c['pending']} waiting for a first call', style: text.bodyMedium),
             onChanged: (v) {
               v == true ? _d.from.add('${c['mob']}') : _d.from.remove('${c['mob']}');
-              _d.rest.coords.remove('${c['mob']}');
+              _d.coords.remove('${c['mob']}');
               _touch();
             },
           ),
+        const SizedBox(height: kGapL),
+        Text('Narrow it down (optional)', style: text.titleSmall),
+        const SizedBox(height: kGapS),
+        _filters(),
       ],
     );
   }
 
-  Widget _to(_Callers data) => Column(
-    crossAxisAlignment: CrossAxisAlignment.start,
-    children: [
-      StepHeader(title: widget.reassignUnstarted ? 'Reassign unstarted calls to' : 'Who should get them?'),
-      if (!widget.reassignUnstarted)
-        SwitchListTile(
-          contentPadding: EdgeInsets.zero,
-          title: const Text('Also give contacts nobody has yet'),
-          value: _d.includeNew,
-          onChanged: (v) {
-            _d.includeNew = v;
-            _touch();
-          },
-        ),
-      const Divider(),
-      CoordinatorPicker(callers: data.callers, group: _d.rest, exclude: _d.from, onChanged: _touch),
-    ],
-  );
+  /// Step 2 of every flow: pick the coordinators (and, when assigning, how many contacts). What will happen is shown right below.
+  Widget _coordinators(BuildContext context, _Callers data) {
+    final text = Theme.of(context).textTheme;
+    final title = switch (_d.kind) {
+      AssignKind.followup => 'Who should call them again?',
+      AssignKind.move => 'Who should get them?',
+      _ => widget.reassignUnstarted ? 'Reassign unstarted calls to' : 'Who should get these contacts?',
+    };
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        StepHeader(title: title),
+        if (_d.kind == AssignKind.assign) ...[
+          TextFormField(
+            initialValue: _d.limit == null ? '' : '${_d.limit}',
+            keyboardType: TextInputType.number,
+            inputFormatters: [FilteringTextInputFormatter.digitsOnly, LengthLimitingTextInputFormatter(6)],
+            decoration: const InputDecoration(labelText: 'How many contacts', hintText: 'All that match'),
+            onChanged: (v) {
+              final n = int.tryParse(v);
+              _d.limit = (n == null || n == 0) ? null : n;
+              _touch();
+            },
+          ),
+          const SizedBox(height: kGapM),
+        ],
+        if (_d.kind == AssignKind.followup)
+          SwitchListTile(
+            contentPadding: EdgeInsets.zero,
+            title: const Text('Same coordinator as before'),
+            value: _d.keepPrevious,
+            onChanged: (v) {
+              _d.keepPrevious = v;
+              _touch();
+            },
+          ),
+        CoordinatorPicker(callers: data.callers, picked: _d.coords, exclude: _d.from, onChanged: _touch, onEditLimit: _editLimit),
+        const SizedBox(height: kGapM),
+        _preview(context),
+        if (_d.coords.isEmpty) Text('Tick the coordinators to see what will happen.', style: text.bodyMedium),
+      ],
+    );
+  }
 
-  Widget _review(BuildContext context) {
+  /// Changes a coordinator's max (the same limit as Admin → Calls) without leaving the wizard, then works out the plan again.
+  Future<void> _editLimit(Map<String, dynamic> c) async {
+    final ctl = TextEditingController(text: c['call_limit']?.toString() ?? '');
+    final v = await showDialog<String>(
+      context: context,
+      builder: (d) => AlertDialog(
+        title: Text('Max for ${c['name']}'),
+        content: TextField(
+          controller: ctl,
+          keyboardType: TextInputType.number,
+          inputFormatters: [FilteringTextInputFormatter.digitsOnly, LengthLimitingTextInputFormatter(4)],
+          autofocus: true,
+          decoration: const InputDecoration(labelText: 'Max contacts (empty = no limit)'),
+        ),
+        actions: [
+          TextButton(onPressed: () => Navigator.pop(d), child: const Text('Cancel')),
+          FilledButton(onPressed: () => Navigator.pop(d, ctl.text.trim()), child: const Text('Save')),
+        ],
+      ),
+    );
+    ctl.dispose();
+    if (v == null || !mounted) return;
+    try {
+      await ref.read(adminRepoProvider).setCaller('${c['mob']}', {'call_limit': v.isEmpty ? null : int.tryParse(v)});
+      ref.invalidate(_callersProvider(widget.event));
+      _touch();
+    } on ApiException catch (e) {
+      if (mounted) showMessage(context, e.message, error: true);
+    }
+  }
+
+  /// What will be saved, worked out by the server. Nothing has been written yet.
+  Widget _preview(BuildContext context) {
+    if (_d.coords.isEmpty) return const SizedBox.shrink();
     final text = Theme.of(context).textTheme;
     final c = context.colors;
     if (_planError != null) return StatusBanner(icon: Icons.error_outline, color: c.danger, text: _planError!);
@@ -578,9 +500,7 @@ class _AssignWizardState extends ConsumerState<AssignWizard> {
     }
     int n(String k) => (p[k] as num?)?.toInt() ?? 0;
     final per = [for (final x in (p['per_coordinator'] as List)) Map<String, dynamic>.from(x as Map)];
-    final groups = [for (final x in (p['groups'] as List)) Map<String, dynamic>.from(x as Map)];
     final taken = [for (final x in (p['taken_from'] as List)) Map<String, dynamic>.from(x as Map)];
-    final short = per.where((x) => x['short'] == true).toList();
     Widget line(String t, {Color? color, IconData? icon}) => Padding(
       padding: const EdgeInsets.only(top: kGapS),
       child: Row(
@@ -593,79 +513,38 @@ class _AssignWizardState extends ConsumerState<AssignWizard> {
         ],
       ),
     );
-    return Column(
-      crossAxisAlignment: CrossAxisAlignment.start,
-      children: [
-        const StepHeader(title: 'Check before saving'),
-        Card(
-          child: Padding(
-            padding: const EdgeInsets.all(kGapL),
-            child: Column(
-              crossAxisAlignment: CrossAxisAlignment.start,
-              children: [
-                Text(n('assignable') == 0 ? 'Nothing to assign' : '${n('assignable')} contacts will be assigned', style: text.headlineSmall),
-                Text('${n('candidates')} contacts matched', style: text.bodyLarge),
-                if (n('kept_with_previous') > 0) line('${n('kept_with_previous')} go back to the coordinator who had them before'),
-                if (n('leftover') > 0)
-                  line(
-                    '${n('leftover')} contacts are LEFT OVER: every coordinator has reached their Maximum. Go Back and raise a Maximum or add a coordinator.',
-                    color: c.danger,
-                    icon: Icons.warning_amber,
-                  ),
-                if (n('left_by_choice') > 0) line('${n('left_by_choice')} contacts stay unassigned, as you chose.', icon: Icons.info_outline),
-                for (final s in short)
-                  line(
-                    '${s['name']} gets ${s['add']}, below the Minimum of ${s['min']}: not enough contacts.',
-                    color: c.warning,
-                    icon: Icons.warning_amber,
-                  ),
-                if (n('replaced') > 0)
-                  line(
-                    '${n('replaced')} calls from the earlier assignment that nobody has made will be removed. Calls already made stay.',
-                    icon: Icons.autorenew,
-                  ),
-                if (taken.isNotEmpty) ...[
-                  const SizedBox(height: kGapM),
-                  Text('Taken from', style: text.titleSmall),
-                  for (final t in taken) Text('${t['name']}: ${t['count']}', style: text.bodyLarge),
-                ],
-              ],
-            ),
-          ),
-        ),
-        if (groups.length > 1)
-          Card(
-            child: Padding(
-              padding: const EdgeInsets.all(kGapL),
-              child: Column(
-                crossAxisAlignment: CrossAxisAlignment.start,
-                children: [
-                  Text('By group', style: text.titleMedium),
-                  for (final g in groups) Text('${g['name']}: ${g['given']} of ${g['matched']} contacts', style: text.bodyLarge),
-                ],
+    return Card(
+      child: Padding(
+        padding: const EdgeInsets.all(kGapL),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Text(n('assignable') == 0 ? 'Nothing to assign' : '${n('assignable')} contacts will be assigned', style: text.headlineSmall),
+            Text('${n('candidates')} contacts match', style: text.bodyLarge),
+            if (n('kept_with_previous') > 0) line('${n('kept_with_previous')} go back to the coordinator who had them before'),
+            if (n('leftover') > 0)
+              line(
+                '${n('leftover')} contacts cannot be given: the coordinators you chose have no room left under their limit. Choose more coordinators or raise a limit in Admin → Calls.',
+                color: c.warning,
+                icon: Icons.warning_amber,
               ),
-            ),
-          ),
-        Card(
-          child: Padding(
-            padding: const EdgeInsets.all(kGapL),
-            child: Column(
-              crossAxisAlignment: CrossAxisAlignment.start,
-              children: [
-                Text('Each coordinator gets', style: text.titleMedium),
-                for (final x in per)
-                  Padding(
-                    padding: const EdgeInsets.only(top: kGapS),
-                    child: Text(
-                      '${x['name']}: ${x['add']}   (minimum ${x['min']}, ${x['max'] == null ? 'no maximum' : 'maximum ${x['max']}'})',
-                      style: text.bodyLarge?.copyWith(color: x['short'] == true ? c.warning : null),
-                    ),
-                  ),
-              ],
-            ),
-          ),
+            const SizedBox(height: kGapM),
+            for (final x in per)
+              Padding(
+                padding: const EdgeInsets.only(top: kGapXS),
+                child: Text(
+                  '${x['name']}: +${x['add']}   (${x['limit'] == null ? 'no limit' : 'max ${x['limit']}'}, already ${x['has']})',
+                  style: text.bodyLarge?.copyWith(color: x['full'] == true ? c.warning : null),
+                ),
+              ),
+            if (taken.isNotEmpty) ...[
+              const SizedBox(height: kGapM),
+              Text('Taken from', style: text.titleSmall),
+              for (final t in taken) Text('${t['name']}: ${t['count']}', style: text.bodyLarge),
+            ],
+          ],
         ),
-      ],
+      ),
     );
   }
 
@@ -673,26 +552,84 @@ class _AssignWizardState extends ConsumerState<AssignWizard> {
     final text = Theme.of(context).textTheme;
     final done = _phase == _Phase.done;
     final saved = _done - _skipped;
-    return Padding(
-      padding: const EdgeInsets.all(kGapXL),
-      child: Column(
-        mainAxisAlignment: MainAxisAlignment.center,
-        crossAxisAlignment: CrossAxisAlignment.start,
-        children: [
-          Icon(done ? Icons.check_circle : Icons.cloud_upload_outlined, size: 48, color: done ? context.colors.success : null),
-          const SizedBox(height: kGapM),
-          Text(done ? '$saved contacts assigned' : 'Saving…', style: text.headlineSmall),
-          const SizedBox(height: kGapS),
-          if (done) ...[
-            if (_skipped > 0) Text('$_skipped skipped (already called or changed meanwhile).', style: text.bodyLarge),
-            if (_release.isNotEmpty) Text('${_release.length} earlier calls nobody had made were replaced.', style: text.bodyLarge),
-          ] else ...[
+    if (!done) {
+      return Padding(
+        padding: const EdgeInsets.all(kGapXL),
+        child: Column(
+          mainAxisAlignment: MainAxisAlignment.center,
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            const Icon(Icons.cloud_upload_outlined, size: 48),
+            const SizedBox(height: kGapM),
+            Text('Saving…', style: text.headlineSmall),
+            const SizedBox(height: kGapS),
             LinearProgressIndicator(value: _total == 0 ? null : _done / _total, minHeight: 8),
             const SizedBox(height: kGapS),
-            Text(_done < _total ? 'Assigned $_done of $_total. Keep this screen open.' : 'Removing replaced calls…', style: text.bodyLarge),
+            Text('Assigned $_done of $_total. Keep this screen open.', style: text.bodyLarge),
           ],
+        ),
+      );
+    }
+    // What each coordinator received, from the server's answers to every saved batch (names, totals and limits come from the plan).
+    final per = [for (final x in ((_plan?['per_coordinator'] as List?) ?? const [])) Map<String, dynamic>.from(x as Map)];
+    final rows = [
+      for (final x in per)
+        (name: '${x['name']}', got: _added['${x['id']}'] ?? 0, has: (x['has'] as num?)?.toInt() ?? 0, limit: (x['limit'] as num?)?.toInt()),
+    ].where((r) => r.got > 0).toList()..sort((a, b) => b.got.compareTo(a.got));
+    final taken = [for (final x in ((_plan?['taken_from'] as List?) ?? const [])) Map<String, dynamic>.from(x as Map)];
+    return ListView(
+      padding: const EdgeInsets.all(kPagePadding),
+      children: [
+        Row(
+          children: [
+            Icon(Icons.check_circle, size: 40, color: context.colors.success),
+            const SizedBox(width: kGapM),
+            Expanded(child: Text('$saved contacts assigned', style: text.headlineSmall)),
+          ],
+        ),
+        const SizedBox(height: kGapXS),
+        Text(rows.length == 1 ? 'Given to 1 coordinator' : 'Shared between ${rows.length} coordinators', style: text.bodyLarge),
+        if (_skipped > 0)
+          Padding(
+            padding: const EdgeInsets.only(top: kGapS),
+            child: StatusBanner(icon: Icons.info_outline, text: '$_skipped skipped (already called or changed meanwhile).'),
+          ),
+        const SizedBox(height: kGapL),
+        Text('Who got how many', style: text.titleMedium),
+        const SizedBox(height: kGapS),
+        for (final r in rows)
+          Card(
+            child: Padding(
+              padding: const EdgeInsets.all(kGapL),
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Row(
+                    children: [
+                      Expanded(child: Text(r.name, style: text.titleMedium)),
+                      Text('+${r.got}', style: text.headlineSmall?.copyWith(color: context.colors.success)),
+                    ],
+                  ),
+                  const SizedBox(height: kGapS),
+                  if (r.limit != null) ...[
+                    LinearProgressIndicator(value: r.limit == 0 ? 1 : ((r.has + r.got) / r.limit!).clamp(0, 1).toDouble(), minHeight: 6),
+                    const SizedBox(height: kGapXS),
+                  ],
+                  Text(
+                    'Now has ${r.has + r.got} contacts${r.limit == null ? '' : ' (max ${r.limit})'}  •  had ${r.has} before',
+                    style: text.bodyMedium,
+                  ),
+                ],
+              ),
+            ),
+          ),
+        if (taken.isNotEmpty) ...[
+          const SizedBox(height: kGapM),
+          Text('Taken from', style: text.titleMedium),
+          const SizedBox(height: kGapS),
+          for (final t in taken) Text('${t['name']}: ${t['count']}', style: text.bodyLarge),
         ],
-      ),
+      ],
     );
   }
 
@@ -702,21 +639,19 @@ class _AssignWizardState extends ConsumerState<AssignWizard> {
     if (_phase == _Phase.saving) return null;
     if (_phase == _Phase.done) return WizardBar(nextLabel: 'Done', onNext: () => Navigator.pop(context, true));
     if (_step == AssignStep.start) return null;
-    final last = _step == AssignStep.review;
+    final last = _step == AssignStep.coordinators;
     final assignable = (_plan?['assignable'] as num?)?.toInt() ?? 0;
     final retry = _saveError != null;
     final ok = switch (_step) {
       AssignStep.calls => _d.statuses.isNotEmpty,
       AssignStep.from => _d.from.isNotEmpty,
-      AssignStep.groups => _d.rest.ready && _d.groups.every((g) => g.readyAsGroup) && _sizes != null && (_sizes!['overlaps'] as List).isEmpty,
-      AssignStep.coordinators || AssignStep.to => _d.rest.coords.isNotEmpty,
       _ => true,
     };
     return WizardBar(
       onBack: _i > 0 ? () => _go(_i - 1) : null,
-      nextLabel: last ? (retry ? 'Resume' : 'Assign now') : 'Next',
+      nextLabel: last ? (retry ? 'Resume' : 'Assign') : 'Next',
       onNext: last
-          ? (_plan == null || assignable + _released == 0 && _release.isEmpty ? null : _save)
+          ? (_plan == null || assignable == 0 ? null : _save)
           : ok
           ? () => _go(_i + 1)
           : null,

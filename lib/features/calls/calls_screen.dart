@@ -43,7 +43,7 @@ class _CallsScreenState extends ConsumerState<CallsScreen> {
       children: [
         data.when(
           loading: () => const Padding(
-            padding: EdgeInsets.all(48),
+            padding: EdgeInsets.all(24),
             child: Center(child: CircularProgressIndicator()),
           ),
           error: (e, _) =>
@@ -96,7 +96,7 @@ class _CallsScreenState extends ConsumerState<CallsScreen> {
                 const SizedBox(height: 8),
                 if (d.items.isEmpty)
                   Padding(
-                    padding: const EdgeInsets.all(32),
+                    padding: const EdgeInsets.all(20),
                     child: Center(
                       child: Text(
                         'No calls assigned to you yet.\nYou will get a notification when an admin assigns some.',
@@ -325,14 +325,14 @@ class _CallCardState extends ConsumerState<_CallCard> {
                 padding: const EdgeInsets.only(top: 8),
                 child: Text([item.profession, item.pgName, item.venue].where((s) => s.isNotEmpty).join('  •  '), style: text.bodyMedium),
               ),
-            const SizedBox(height: 12),
+            const SizedBox(height: 10),
             FilledButton.icon(
               onPressed: _call,
               icon: const Icon(Icons.call),
               label: Text('Call  ${item.mob.length == 10 ? '${item.mob.substring(0, 5)} ${item.mob.substring(5)}' : item.mob}'),
               style: FilledButton.styleFrom(backgroundColor: _called ? context.colors.success : null),
             ),
-            const SizedBox(height: 12),
+            const SizedBox(height: 10),
             DropdownButtonFormField<String>(
               key: ValueKey('st-${item.id}-$_status'),
               initialValue: statuses.contains(_status) ? _status : null,
@@ -371,7 +371,7 @@ class _CallCardState extends ConsumerState<_CallCard> {
                   ],
                 ),
               ),
-            const SizedBox(height: 12),
+            const SizedBox(height: 10),
             // Stacked full-width buttons: long labels such as "Send message first" never wrap on a phone.
             OutlinedButton.icon(
               onPressed: _whatsapp,
@@ -405,7 +405,7 @@ class HistorySheet extends ConsumerWidget {
         Widget body;
         if (snap.connectionState != ConnectionState.done) {
           body = const Padding(
-            padding: EdgeInsets.all(32),
+            padding: EdgeInsets.all(20),
             child: Center(child: CircularProgressIndicator()),
           );
         } else if (snap.hasError) {
@@ -414,7 +414,7 @@ class HistorySheet extends ConsumerWidget {
           final rows = ((snap.data![calls ? 'calls' : 'sessions'] as List?) ?? const []).map((e) => Map<String, dynamic>.from(e as Map)).toList();
           body = rows.isEmpty
               ? Padding(
-                  padding: const EdgeInsets.all(24),
+                  padding: const EdgeInsets.all(16),
                   child: Center(child: Text(calls ? 'No calls recorded yet.' : 'No sessions attended yet.', style: text.bodyLarge)),
                 )
               : Column(

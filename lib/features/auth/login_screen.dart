@@ -288,9 +288,9 @@ class _LoginScreenState extends ConsumerState<LoginScreen> {
                 ),
             ],
           ),
-          if (_error != null) ...[const SizedBox(height: 14), StatusBanner(icon: Icons.error_outline, text: _error!, color: context.colors.danger)],
+          if (_error != null) ...[const SizedBox(height: 10), StatusBanner(icon: Icons.error_outline, text: _error!, color: context.colors.danger)],
           if (_info != null && !_codeStep) ...[
-            const SizedBox(height: 14),
+            const SizedBox(height: 10),
             StatusBanner(icon: Icons.hourglass_top_outlined, text: _info!, color: context.colors.success),
           ],
           const SizedBox(height: 20),

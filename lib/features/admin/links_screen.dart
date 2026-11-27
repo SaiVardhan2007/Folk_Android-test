@@ -57,7 +57,7 @@ class LinksScreen extends ConsumerWidget {
           const SizedBox(height: kGapM),
           links.when(
             loading: () => const Padding(
-              padding: EdgeInsets.all(32),
+              padding: EdgeInsets.all(20),
               child: Center(child: CircularProgressIndicator()),
             ),
             error: (e, _) =>
@@ -69,7 +69,7 @@ class LinksScreen extends ConsumerWidget {
               ];
               return list.isEmpty
                   ? Padding(
-                      padding: const EdgeInsets.all(24),
+                      padding: const EdgeInsets.all(16),
                       child: Center(child: Text('No links yet. Tap New link.', style: text.bodyMedium)),
                     )
                   : Column(

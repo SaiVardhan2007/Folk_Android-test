@@ -13,6 +13,7 @@ class PersonFormController extends ChangeNotifier {
   final college = OptionController();
   final branch = OptionController();
   final pg = OptionController();
+  final area = OptionController();
   final skills = MultiOptionController();
   final interests = MultiOptionController();
   final chanting = TextEditingController();
@@ -31,6 +32,7 @@ class PersonFormController extends ChangeNotifier {
     college.set(Opt(p?.collegeId ?? '', p?.profession ?? ''));
     branch.set(Opt(p?.branchId ?? '', p?.branch ?? ''));
     pg.set(Opt(p?.pgId ?? '', p?.pgName ?? ''));
+    area.set(Opt(p?.areaId ?? '', p?.areaName ?? ''));
     guideId = p?.guideId ?? '';
     gender = p?.gender ?? '';
     level = p?.level ?? '';
@@ -59,7 +61,35 @@ class PersonFormController extends ChangeNotifier {
     notifyListeners();
   }
 
-  Map<String, dynamic> toJson() => {
+  /// Which form field each key of [toJson] belongs to (for [toJson]'s `only`).
+  static const _keysOf = {
+    'name': ['name'],
+    'gender': ['gender'],
+    'level': ['level'],
+    'occupation': ['occupation'],
+    'college': ['college_id', 'profession'],
+    'branch': ['branch_id', 'branch'],
+    'pg': ['pg_id', 'pg_name'],
+    'area': ['area_id', 'area_name'],
+    'guide': ['guide_id'],
+    'dob': ['dob'],
+    'stay': ['current_stay'],
+    'skills': ['skill_ids'],
+    'interests': ['interest_ids'],
+    'chanting': ['chanting_rounds'],
+    'feedback': ['feedback'],
+    'comments': ['comments'],
+  };
+
+  /// The form as JSON. With [only] (field names such as 'dob', 'college'), just those fields.
+  Map<String, dynamic> toJson({Set<String>? only}) {
+    final all = _all();
+    if (only == null) return all;
+    final keys = {for (final f in only) ...?_keysOf[f]};
+    return {for (final e in all.entries) if (keys.contains(e.key)) e.key: e.value};
+  }
+
+  Map<String, dynamic> _all() => {
     'name': name.text.trim(),
     'gender': gender,
     'level': level,
@@ -67,6 +97,7 @@ class PersonFormController extends ChangeNotifier {
     ..._picked(college, 'college_id', 'profession'),
     ..._picked(branch, 'branch_id', 'branch'),
     ..._picked(pg, 'pg_id', 'pg_name'),
+    ..._picked(area, 'area_id', 'area_name'),
     if (guideId.isNotEmpty) 'guide_id': guideId,
     'dob': dob,
     if (int.tryParse(chanting.text.trim()) != null) 'chanting_rounds': int.parse(chanting.text.trim()),
@@ -91,6 +122,7 @@ class PersonFormController extends ChangeNotifier {
     college.dispose();
     branch.dispose();
     pg.dispose();
+    area.dispose();
     skills.dispose();
     interests.dispose();
     chanting.dispose();
@@ -99,28 +131,50 @@ class PersonFormController extends ChangeNotifier {
   }
 }
 
+/// The details of [p] that are still empty, as form field names (see [PersonFields.only]). Guide is left out: everyone has one.
+Set<String> unfilledFields(Person p) => {
+  if (p.gender.isEmpty) 'gender',
+  if (p.level.isEmpty) 'level',
+  if (p.occupation.isEmpty) 'occupation',
+  if (p.collegeId.isEmpty) 'college',
+  if (p.branchId.isEmpty) 'branch',
+  if (p.pgId.isEmpty) 'pg',
+  if (p.areaId.isEmpty) 'area',
+  if (p.dob.isEmpty) 'dob',
+  if (p.currentStay.isEmpty) 'stay',
+  if (p.skillList.isEmpty) 'skills',
+  if (p.interestList.isEmpty) 'interests',
+  if (p.chantingRounds <= 0) 'chanting',
+  if (p.feedback.isEmpty) 'feedback',
+  if (p.comments.isEmpty) 'comments',
+};
+
 class PersonFields extends ConsumerWidget {
-  const PersonFields({super.key, required this.form, required this.boot, this.requireLevel = true});
+  const PersonFields({super.key, required this.form, required this.boot, this.requireLevel = true, this.only});
   final PersonFormController form;
   final Bootstrap? boot;
   final bool requireLevel;
+
+  /// Show just these fields (names as in [unfilledFields]); null shows all of them.
+  final Set<String>? only;
 
   @override
   Widget build(BuildContext context, WidgetRef ref) {
     final opts = ref.watch(optionsProvider).value ?? const OptionLists();
     Future<Opt?> Function(String) add(OptionList l) =>
         (t) => addOption(context, ref, l, t);
+    bool show(String field) => only == null || only!.contains(field);
     return ListenableBuilder(
       listenable: form,
       builder: (context, _) => FieldGrid(
         children: [
-          TextFormField(
+          if (show('name')) TextFormField(
             controller: form.name,
             textCapitalization: TextCapitalization.words,
             decoration: const InputDecoration(labelText: 'Full name', prefixIcon: Icon(Icons.person_outline)),
             validator: (v) => (v ?? '').trim().isEmpty ? 'Enter the name' : null,
           ),
-          OptionDropdown(
+          if (show('gender')) OptionDropdown(
             label: 'Gender',
             value: form.gender,
             options: boot?.genders ?? const ['M', 'F'],
@@ -128,7 +182,7 @@ class PersonFields extends ConsumerWidget {
             icon: Icons.wc_outlined,
             onChanged: (v) => form.set(gender: v),
           ),
-          DropdownButtonFormField<String>(
+          if (show('level')) DropdownButtonFormField<String>(
             key: ValueKey('level-${form.level}'),
             initialValue: (boot?.levels ?? const ['Folk Foundation', 'Folk Prelims']).contains(form.level) ? form.level : null,
             isExpanded: true,
@@ -139,79 +193,86 @@ class PersonFields extends ConsumerWidget {
             onChanged: (v) => form.set(level: v ?? ''),
             validator: (v) => requireLevel && (v == null || v.isEmpty) ? 'Choose a level' : null,
           ),
-          OptionDropdown(
+          if (show('occupation')) OptionDropdown(
             label: 'Occupation',
             value: form.occupation,
             options: boot?.occupations ?? const ['Student', 'Job Search', 'Working'],
             icon: Icons.work_outline,
             onChanged: (v) => form.set(occupation: v),
           ),
-          OptionPicker(
+          if (show('college')) OptionPicker(
             controller: form.college,
             label: 'Company / College',
             icon: Icons.apartment_outlined,
             options: opts[OptionList.college],
             onAdd: add(OptionList.college),
           ),
-          OptionPicker(
+          if (show('branch')) OptionPicker(
             controller: form.branch,
             label: 'Branch',
             icon: Icons.account_tree_outlined,
             options: opts[OptionList.branch],
             onAdd: add(OptionList.branch),
           ),
-          OptionPicker(
+          if (show('pg')) OptionPicker(
             controller: form.pg,
             label: 'PG / Residence',
             icon: Icons.home_outlined,
             options: opts[OptionList.pg],
             onAdd: add(OptionList.pg),
           ),
-          GuideDropdown(
+          if (show('area')) OptionPicker(
+            controller: form.area,
+            label: 'Area of stay',
+            icon: Icons.location_on_outlined,
+            options: opts[OptionList.area],
+            onAdd: add(OptionList.area),
+          ),
+          if (show('guide')) GuideDropdown(
             guides: opts.guides,
             value: form.guideId.isEmpty ? (opts.defaultGuide?.id ?? '') : form.guideId,
             onChanged: (v) => form.set(guideId: v),
           ),
-          DateOfBirthField(
+          if (show('dob')) DateOfBirthField(
             value: form.dob,
             oldAge: form.oldAge,
             onChanged: (v) => form.set(dob: v),
           ),
-          OptionDropdown(
+          if (show('stay')) OptionDropdown(
             label: 'Staying',
             value: form.stay,
             options: boot?.stays ?? const ['With Parents', 'In Hostel'],
             icon: Icons.bed_outlined,
             onChanged: (v) => form.set(stay: v),
           ),
-          MultiOptionPicker(
+          if (show('skills')) MultiOptionPicker(
             controller: form.skills,
             label: 'Skills',
             icon: Icons.star_outline,
             options: opts[OptionList.skill],
             onAdd: add(OptionList.skill),
           ),
-          MultiOptionPicker(
+          if (show('interests')) MultiOptionPicker(
             controller: form.interests,
             label: 'Interests',
             icon: Icons.favorite_border,
             options: opts[OptionList.interest],
             onAdd: add(OptionList.interest),
           ),
-          TextFormField(
+          if (show('chanting')) TextFormField(
             controller: form.chanting,
             keyboardType: TextInputType.number,
             inputFormatters: [FilteringTextInputFormatter.digitsOnly, LengthLimitingTextInputFormatter(3)],
             decoration: const InputDecoration(labelText: 'Chanting rounds', prefixIcon: Icon(Icons.self_improvement_outlined)),
           ),
-          OptionDropdown(
+          if (show('feedback')) OptionDropdown(
             label: 'Feedback',
             value: form.feedback,
             options: boot?.feedbacks ?? const ['Excellent', 'Good'],
             icon: Icons.thumb_up_alt_outlined,
             onChanged: (v) => form.set(feedback: v),
           ),
-          TextFormField(
+          if (show('comments')) TextFormField(
             controller: form.comments,
             maxLines: 2,
             textCapitalization: TextCapitalization.sentences,

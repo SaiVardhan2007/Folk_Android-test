@@ -47,11 +47,11 @@ class CallsAdminTab extends ConsumerWidget {
     ref.invalidate(_statsProvider);
   }
 
-  Future<void> _openAssign(BuildContext context, WidgetRef ref, String event, Bootstrap? boot, {bool reassign = false}) async {
+  Future<void> _openAssign(BuildContext context, WidgetRef ref, String event, Bootstrap? boot, {bool reassign = false, String? moveFrom}) async {
     final name = boot?.eventsAndLists.where((e) => e.code == event).firstOrNull?.name ?? event;
     final done = await Navigator.of(context, rootNavigator: true).push<bool>(
       MaterialPageRoute(
-        builder: (_) => AssignWizard(event: event, eventName: name, reassignUnstarted: reassign),
+        builder: (_) => AssignWizard(event: event, eventName: name, reassignUnstarted: reassign, moveFromMob: moveFrom),
       ),
     );
     if (done == true) _refresh(ref);
@@ -63,7 +63,6 @@ class CallsAdminTab extends ConsumerWidget {
     final event = ref.watch(_callTargetProvider);
     final boot = ref.watch(bootstrapProvider).value;
     final callers = ref.watch(_callersProvider(event));
-    final repo = ref.read(adminRepoProvider);
 
     return PageBody(
       onRefresh: () async => _refresh(ref),
@@ -83,7 +82,7 @@ class CallsAdminTab extends ConsumerWidget {
             ],
             onChanged: (v) => v == null ? null : ref.read(_callTargetProvider.notifier).select(v),
           ),
-        const SizedBox(height: 14),
+        const SizedBox(height: 10),
         Wrap(
           spacing: 10,
           runSpacing: 10,
@@ -97,6 +96,12 @@ class CallsAdminTab extends ConsumerWidget {
               onPressed: event == null ? null : () => _openAssign(context, ref, event, boot, reassign: true),
               icon: const Icon(Icons.swap_horiz),
               label: const Text('Reassign Unstarted'),
+            ),
+            OutlinedButton.icon(
+              style: OutlinedButton.styleFrom(foregroundColor: context.colors.danger),
+              onPressed: event == null ? null : () => _removeAll(context, ref, event, boot),
+              icon: const Icon(Icons.delete_sweep_outlined),
+              label: const Text('Remove all assigned'),
             ),
             OutlinedButton.icon(
               onPressed: () => showModalBottomSheet<void>(
@@ -115,7 +120,7 @@ class CallsAdminTab extends ConsumerWidget {
               .watch(_statsProvider(event))
               .when(
                 loading: () => const Padding(
-                  padding: EdgeInsets.all(24),
+                  padding: EdgeInsets.all(16),
                   child: Center(child: CircularProgressIndicator()),
                 ),
                 error: (e, _) => ErrorView(
@@ -173,14 +178,14 @@ class CallsAdminTab extends ConsumerWidget {
         const SectionTitle('Coordinators'),
         callers.when(
           loading: () => const Padding(
-            padding: EdgeInsets.all(24),
+            padding: EdgeInsets.all(16),
             child: Center(child: CircularProgressIndicator()),
           ),
           error: (e, _) =>
               ErrorView(message: e is ApiException ? e.message : 'Could not load coordinators.', onRetry: () => ref.invalidate(_callersProvider)),
           data: (list) => list.isEmpty
               ? Padding(
-                  padding: const EdgeInsets.all(24),
+                  padding: const EdgeInsets.all(16),
                   child: Text('No coordinators yet.', style: text.bodyLarge),
                 )
               : Column(
@@ -205,28 +210,13 @@ class CallsAdminTab extends ConsumerWidget {
                                     const SizedBox(height: 6),
                                     ActionChip(
                                       avatar: const Icon(Icons.speed_outlined, size: 18),
-                                      label: Text(c['call_limit'] == null ? 'No call limit' : 'Limit ${c['call_limit']}'),
+                                      label: Text(c['call_limit'] == null ? 'No max limit' : 'Max limit ${c['call_limit']}'),
                                       onPressed: () => _editLimit(context, ref, c),
                                     ),
                                   ],
                                 ),
                               ),
-                              Column(
-                                children: [
-                                  Switch(
-                                    value: c['auto_assign'] == true,
-                                    onChanged: (v) async {
-                                      try {
-                                        await repo.setCaller('${c['mob']}', {'auto_assign': v});
-                                        ref.invalidate(_callersProvider);
-                                      } on ApiException catch (e) {
-                                        if (context.mounted) showMessage(context, e.message, error: true);
-                                      }
-                                    },
-                                  ),
-                                  Text('Auto assign', style: text.bodySmall),
-                                ],
-                              ),
+                              Switch(value: c['enabled'] != false, onChanged: (v) => _setEnabled(context, ref, event, boot, c, v)),
                             ],
                           ),
                         ),
@@ -238,18 +228,98 @@ class CallsAdminTab extends ConsumerWidget {
     );
   }
 
+  /// "Remove all assigned": deletes every assignment of this event for every coordinator, including calls already made. The call history stays.
+  Future<void> _removeAll(BuildContext context, WidgetRef ref, String event, Bootstrap? boot) async {
+    final name = boot?.eventsAndLists.where((e) => e.code == event).firstOrNull?.name ?? event;
+    final ok = await showDialog<bool>(
+      context: context,
+      builder: (d) => AlertDialog(
+        title: const Text('Remove all assigned contacts?'),
+        content: Text(
+          'Every contact assigned for $name will be taken away from the coordinators, including contacts already called, and they all become unassigned again. '
+          'The call history stays, but these contacts will no longer count as called for this event.',
+        ),
+        actions: [
+          TextButton(onPressed: () => Navigator.pop(d, false), child: const Text('Cancel')),
+          FilledButton(
+            style: FilledButton.styleFrom(backgroundColor: context.colors.danger),
+            onPressed: () => Navigator.pop(d, true),
+            child: const Text('Remove all'),
+          ),
+        ],
+      ),
+    );
+    if (ok != true || !context.mounted) return;
+    try {
+      final n = await ref.read(adminRepoProvider).unassign(event: event, all: true);
+      _refresh(ref);
+      if (context.mounted) showMessage(context, '$n assigned contact${n == 1 ? '' : 's'} removed.');
+    } on ApiException catch (e) {
+      if (context.mounted) showMessage(context, e.message, error: true);
+    }
+  }
+
+  /// Switching a coordinator off hides them from every assign screen. It is refused while they still hold calls nobody has made:
+  /// the admin must first move those to someone else or remove them.
+  Future<void> _setEnabled(BuildContext context, WidgetRef ref, String? event, Bootstrap? boot, Map<String, dynamic> c, bool on) async {
+    final repo = ref.read(adminRepoProvider);
+    final mob = '${c['mob']}';
+    Future<bool> save() async {
+      try {
+        await repo.setCaller(mob, {'enabled': on});
+        _refresh(ref);
+        return true;
+      } on ApiException catch (e) {
+        if (context.mounted) showMessage(context, e.message, error: true);
+        return false;
+      }
+    }
+
+    final waiting = (c['pending'] as num?)?.toInt() ?? 0;
+    if (on || waiting == 0) {
+      await save();
+      return;
+    }
+    final choice = await showDialog<String>(
+      context: context,
+      builder: (d) => AlertDialog(
+        title: Text('${c['name']} still has calls'),
+        content: Text(
+          '${c['name']} has $waiting call${waiting == 1 ? '' : 's'} nobody has made yet. To switch them off, first move those calls to another coordinator or remove them.',
+        ),
+        actions: [
+          TextButton(onPressed: () => Navigator.pop(d), child: const Text('Cancel')),
+          TextButton(onPressed: () => Navigator.pop(d, 'remove'), child: const Text('Remove their calls')),
+          FilledButton(onPressed: () => Navigator.pop(d, 'move'), child: const Text('Move to others')),
+        ],
+      ),
+    );
+    if (!context.mounted || choice == null) return;
+    if (choice == 'move') {
+      if (event != null) await _openAssign(context, ref, event, boot, moveFrom: mob);
+      return;
+    }
+    try {
+      await repo.unassign(coordinatorMob: mob);
+    } on ApiException catch (e) {
+      if (context.mounted) showMessage(context, e.message, error: true);
+      return;
+    }
+    if (await save() && context.mounted) showMessage(context, '${c['name']} is switched off.');
+  }
+
   Future<void> _editLimit(BuildContext context, WidgetRef ref, Map<String, dynamic> c) async {
     final ctl = TextEditingController(text: c['call_limit']?.toString() ?? '');
     final v = await showDialog<String>(
       context: context,
       builder: (d) => AlertDialog(
-        title: Text('Call limit for ${c['name']}'),
+        title: Text('Max limit for ${c['name']}'),
         content: TextField(
           controller: ctl,
           keyboardType: TextInputType.number,
           inputFormatters: [FilteringTextInputFormatter.digitsOnly, LengthLimitingTextInputFormatter(4)],
           autofocus: true,
-          decoration: const InputDecoration(labelText: 'Call limit (empty = none)'),
+          decoration: const InputDecoration(labelText: 'Max contacts (empty = no limit)'),
         ),
         actions: [
           TextButton(onPressed: () => Navigator.pop(d), child: const Text('Cancel')),
@@ -281,7 +351,7 @@ class _TemplatesSheet extends StatelessWidget {
       children: [
         Text('WhatsApp messages', style: text.titleLarge),
         const SizedBox(height: 4),
-        const SizedBox(height: 12),
+        const SizedBox(height: 10),
         TemplatesEditor(onSaved: () => Navigator.pop(context)),
       ],
     );

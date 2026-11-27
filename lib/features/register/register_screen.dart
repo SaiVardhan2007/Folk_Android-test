@@ -54,9 +54,9 @@ class _RegisterScreenState extends ConsumerState<RegisterScreen> {
       child: PageBody(
         children: [
           Text('Register a new attendee', style: Theme.of(context).textTheme.titleLarge),
-          const SizedBox(height: 14),
+          const SizedBox(height: 10),
           const EventPicker(label: 'Registering for event'),
-          const SizedBox(height: 14),
+          const SizedBox(height: 10),
           TextFormField(
             controller: _mob,
             keyboardType: TextInputType.phone,
@@ -64,7 +64,7 @@ class _RegisterScreenState extends ConsumerState<RegisterScreen> {
             decoration: const InputDecoration(labelText: 'Mobile number *', prefixIcon: Icon(Icons.phone_outlined), prefixText: '+91  '),
             validator: (v) => normalizeMobile(v ?? '') == null ? 'Enter a valid 10-digit mobile number' : null,
           ),
-          const SizedBox(height: 14),
+          const SizedBox(height: 10),
           PersonFields(form: _form, boot: boot),
           const SizedBox(height: 20),
           FilledButton.icon(

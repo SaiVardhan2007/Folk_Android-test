@@ -21,7 +21,7 @@ String optKey(String s) => s.toLowerCase().replaceAll(RegExp(r'[^\p{L}\p{N}]', u
 List<Opt> _opts(Object? v) => ((v as List?) ?? const []).map((e) => Opt.fromJson(Map<String, dynamic>.from(e as Map))).toList();
 
 /// The dropdown lists stored by ID on the server. [OptionList.name] is the list's name in the API (/options/college).
-enum OptionList { college, branch, skill, interest, pg }
+enum OptionList { college, branch, skill, interest, pg, area }
 
 /// A FOLK Guide: name in capitals (e.g. VKGD) and the guide's phone, which belongs to the guide, not to each person.
 /// Guides are added only in ERPNext (the app has no Add button for them).
@@ -69,6 +69,8 @@ class Person {
     this.interestList = const [],
     this.pgName = '',
     this.pgId = '',
+    this.areaName = '',
+    this.areaId = '',
     this.dob = '',
     this.eventCode = '',
     this.tag = 'Public',
@@ -104,6 +106,8 @@ class Person {
       branchId,
       pgName,
       pgId,
+      areaName,
+      areaId,
       eventCode,
       tag,
       lastAttendedOn,
@@ -149,6 +153,8 @@ class Person {
     interestList: _opts(j['interest_list']),
     pgName: j['pg_name'] as String? ?? '',
     pgId: j['pg_id'] as String? ?? '',
+    areaName: j['area_name'] as String? ?? '',
+    areaId: j['area_id'] as String? ?? '',
     dob: j['dob'] as String? ?? '',
     eventCode: j['event_code'] as String? ?? '',
     tag: j['tag'] as String? ?? 'Public',
@@ -186,6 +192,8 @@ class Person {
     'interest_list': [for (final o in interestList) o.toJson()],
     'pg_name': pgName,
     'pg_id': pgId,
+    'area_name': areaName,
+    'area_id': areaId,
     'dob': dob,
     'event_code': eventCode,
     'tag': tag,

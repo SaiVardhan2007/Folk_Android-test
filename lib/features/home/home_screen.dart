@@ -70,7 +70,6 @@ class _HomeScreenState extends ConsumerState<HomeScreen> with WidgetsBindingObse
     final me = ref.watch(authProvider).value;
     final boot = ref.watch(bootstrapProvider);
     final event = ref.watch(selectedEventProvider);
-    final registered = event == null ? null : ref.watch(homeStatsProvider(event));
     final progress = event == null ? null : ref.watch(callProgressProvider(event));
     final eventName = boot.value?.events.where((e) => e.code == event).firstOrNull?.name ?? event ?? '';
     void openStatus() => Navigator.of(context, rootNavigator: true).push(
@@ -87,7 +86,6 @@ class _HomeScreenState extends ConsumerState<HomeScreen> with WidgetsBindingObse
         ref.invalidate(bootstrapProvider);
         ref.invalidate(myLinksProvider);
         if (event != null) {
-          ref.invalidate(homeStatsProvider(event));
           ref.invalidate(callProgressProvider(event));
           if (isCoordinator) ref.invalidate(myCallSummaryProvider(event));
         }
@@ -115,7 +113,7 @@ class _HomeScreenState extends ConsumerState<HomeScreen> with WidgetsBindingObse
         const SizedBox(height: 16),
         boot.when(
           loading: () => const Padding(
-            padding: EdgeInsets.all(32),
+            padding: EdgeInsets.all(20),
             child: Center(child: CircularProgressIndicator()),
           ),
           error: (e, _) => ErrorView(message: e is ApiException ? e.message : 'Could not load.', onRetry: () => ref.invalidate(bootstrapProvider)),
@@ -123,13 +121,12 @@ class _HomeScreenState extends ConsumerState<HomeScreen> with WidgetsBindingObse
             crossAxisAlignment: CrossAxisAlignment.start,
             children: [
               const EventPicker(),
-              const SizedBox(height: 14),
+              const SizedBox(height: 10),
               StatGrid(
                 children: [
-                  StatTile(icon: Icons.people_alt_rounded, label: 'Signed up', value: registered?.value, color: context.colors.accent),
                   StatTile(
                     icon: Icons.assignment_ind_outlined,
-                    label: 'Assigned',
+                    label: 'Assigned contacts',
                     value: progress?.value?.assigned,
                     color: context.colors.brand,
                     onTap: event == null ? null : openStatus,
@@ -141,13 +138,14 @@ class _HomeScreenState extends ConsumerState<HomeScreen> with WidgetsBindingObse
                     color: context.colors.success,
                     onTap: event == null ? null : openStatus,
                   ),
-                  StatTile(
-                    icon: Icons.pending_actions_rounded,
-                    label: 'Pending',
-                    value: progress?.value?.pending,
-                    color: context.colors.warning,
-                    onTap: event == null ? null : openStatus,
-                  ),
+                  if (isCoordinator)
+                    StatTile(
+                      icon: Icons.directions_walk_rounded,
+                      label: 'Attended',
+                      value: callSummary?.value?.came,
+                      color: context.colors.accent,
+                      onTap: callSummary?.value == null ? null : () => _showCalls(context, callSummary!.value!, cameOnly: true),
+                    ),
                 ],
               ),
               const SizedBox(height: kGapM),
@@ -156,30 +154,9 @@ class _HomeScreenState extends ConsumerState<HomeScreen> with WidgetsBindingObse
                 child: FilledButton.icon(
                   onPressed: event == null ? null : openStatus,
                   icon: const Icon(Icons.leaderboard_rounded),
-                  label: const Text('Calling status'),
+                  label: const Text('Coordinators and their contacts'),
                 ),
               ),
-              if (isCoordinator) ...[
-                const SizedBox(height: kGapM),
-                StatGrid(
-                  children: [
-                    StatTile(
-                      icon: Icons.phone_in_talk_rounded,
-                      label: 'My calls',
-                      value: callSummary?.value?.called,
-                      color: context.colors.brand,
-                      onTap: callSummary?.value == null ? null : () => _showCalls(context, callSummary!.value!, cameOnly: false),
-                    ),
-                    StatTile(
-                      icon: Icons.directions_walk_rounded,
-                      label: 'My calls that came',
-                      value: callSummary?.value?.came,
-                      color: context.colors.success,
-                      onTap: callSummary?.value == null ? null : () => _showCalls(context, callSummary!.value!, cameOnly: true),
-                    ),
-                  ],
-                ),
-              ],
             ],
           ),
         ),
@@ -225,7 +202,7 @@ class _CallsSheet extends StatelessWidget {
               const SizedBox(height: 8),
               if (rows.isEmpty)
                 Padding(
-                  padding: const EdgeInsets.all(24),
+                  padding: const EdgeInsets.all(16),
                   child: Center(
                     child: Text(
                       cameOnly ? 'None of the people you called have come yet.' : 'You have not made any calls for this event yet.',

@@ -1,3 +1,10 @@
+> **Superseded (Nov 2026).** The wizard is now two steps for every flow: 1) choose the contacts (filters), 2) choose the coordinators and
+> assign. No groups, no Min, no review screen, no replacing. Assigning only draws from contacts nobody has been given yet for the event
+> and goes on top of what coordinators already hold; the top of step 1 shows how many contacts are not assigned yet. "How many contacts"
+> caps one hand-out. A coordinator's only limit is their Max (Admin → Calls); what they already hold counts against it. The switch on each
+> coordinator in Admin → Calls turns them off (hidden from assigning) and is refused while they hold calls nobody has made. "Remove all
+> assigned" deletes every unstarted call for the event. The text below is the older design.
+
 # Assign Calls: Step-by-Step Wizard (plan)
 
 Replaces the current one-page `lib/features/admin/assign_screen.dart`. The goal is that the admin sees one question

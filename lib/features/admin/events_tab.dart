@@ -58,7 +58,7 @@ class _EventsTabState extends ConsumerState<EventsTab> with AutomaticKeepAliveCl
                 decoration: const InputDecoration(labelText: 'Event name'),
                 validator: (v) => (v ?? '').trim().isEmpty ? 'Enter a name' : null,
               ),
-              const SizedBox(height: 12),
+              const SizedBox(height: 10),
               TextFormField(
                 controller: code,
                 textCapitalization: TextCapitalization.characters,
@@ -109,10 +109,10 @@ class _EventsTabState extends ConsumerState<EventsTab> with AutomaticKeepAliveCl
         FilledButton.icon(onPressed: _busy ? null : _add, icon: const Icon(Icons.add), label: const Text('Add event')),
         const SizedBox(height: 8),
         const SizedBox(height: 8),
-        const SizedBox(height: 12),
+        const SizedBox(height: 10),
         boot.when(
           loading: () => const Padding(
-            padding: EdgeInsets.all(32),
+            padding: EdgeInsets.all(20),
             child: Center(child: CircularProgressIndicator()),
           ),
           error: (e, _) =>
@@ -149,7 +149,7 @@ class _EventsTabState extends ConsumerState<EventsTab> with AutomaticKeepAliveCl
                               ],
                             ),
                             Text('Code: ${e.code}', style: text.bodyMedium),
-                            const SizedBox(height: 12),
+                            const SizedBox(height: 10),
                             for (final type in const ['Registration', 'Feedback'])
                               if (formOf(e.code, type) case final l?)
                                 Padding(

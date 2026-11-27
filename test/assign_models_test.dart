@@ -2,56 +2,49 @@ import 'package:flutter_test/flutter_test.dart';
 import 'package:folk_android_app/features/admin/assign/assign_models.dart';
 
 void main() {
-  test('plan body carries filters, groups and limits in the shape the server expects', () {
-    final d = AssignDraft('EV1')..kind = AssignKind.assign;
+  test('plan body carries the filters, the limit and the coordinators in the shape the server expects', () {
+    final d = AssignDraft('EV1')
+      ..kind = AssignKind.assign
+      ..limit = 40;
     d.filters.add(FilterDraft('college', values: {'c1': 'CBIT'}));
-    final g = GroupDraft(
-      filters: [
-        FilterDraft('branch', values: {'': '(Empty)'}),
-      ],
-    );
-    g.coords['9876543210'] = CoordPick('9876543210', 'Ravi', min: 3, max: 10);
-    d.groups.add(g);
-    d.rest.leave = true;
+    d.coords.add('9876543210');
     final b = d.planBody();
     expect(b['kind'], 'assign');
+    expect(b['event'], 'EV1');
+    expect(b['limit'], 40);
     expect((b['filters'] as List).last, {
       'field': 'college',
       'mode': 'only',
       'values': ['c1'],
     });
-    final gj = (b['groups'] as List).single as Map;
-    expect(gj['coordinators'], [
-      {'mob': '9876543210', 'min': 3, 'max': 10},
-    ]);
-    expect((b['rest'] as Map)['leave'], true);
+    expect(b['to'], {
+      'coordinators': ['9876543210'],
+      'keep_previous': false,
+    });
   });
 
-  test('everyone starts selected except women; coordinators start at 20 to 50', () {
+  test('"how many" only applies to a normal assignment', () {
+    final d = AssignDraft('EV1')
+      ..kind = AssignKind.followup
+      ..limit = 40;
+    expect(d.planBody()['limit'], 0);
+  });
+
+  test('everyone starts selected except women', () {
     final d = AssignDraft('EV1');
+    expect(d.filters.single.field, 'gender');
     expect(d.filters.single.values.keys, ['M', '']);
-    final c = CoordPick('1', 'A');
-    expect((c.min, c.max), (20, 50));
   });
 
-  test('a group needs contacts chosen, and coordinators or "leave unassigned"', () {
-    final g = GroupDraft();
-    expect(g.readyAsGroup, false);
-    g.filters.add(FilterDraft('college', values: {'c1': 'CBIT'}));
-    expect(g.readyAsGroup, false);
-    g.coords['1'] = CoordPick('1', 'A');
-    expect(g.readyAsGroup, true);
+  test('filter summary is short when many values are ticked', () {
+    final f = FilterDraft('branch', values: {'a': 'CSE', 'b': 'ECE'});
+    expect(f.summary, 'Branch: CSE, ECE');
+    final many = FilterDraft('branch', values: {for (var i = 0; i < 5; i++) '$i': 'B$i'});
+    expect(many.summary, 'Branch: 5 selected');
   });
 
-  test('reassigning unstarted calls has just two steps', () {
-    expect(stepsFor(AssignKind.move, reassign: true), [AssignStep.to, AssignStep.review]);
-  });
-
-  test('a group is ready only with coordinators or when left unassigned', () {
-    final g = GroupDraft();
-    expect(g.ready, false);
-    g.leave = true;
-    expect(g.ready, true);
+  test('reassigning unstarted calls has just one step', () {
+    expect(stepsFor(AssignKind.move, reassign: true), [AssignStep.coordinators]);
   });
 
   test('batches never exceed the size and keep each coordinator apart', () {
@@ -69,11 +62,12 @@ void main() {
     expect(b.last['coordinator'], 'b');
   });
 
-  test('each kind has its own steps and always starts and ends sensibly', () {
+  test('each kind is two steps: choose the contacts, then the coordinators', () {
     expect(stepsFor(null), [AssignStep.start]);
     for (final k in AssignKind.values) {
       expect(stepsFor(k).first, AssignStep.start);
-      expect(stepsFor(k).last, AssignStep.review);
+      expect(stepsFor(k).last, AssignStep.coordinators);
+      expect(stepsFor(k).length, 3);
     }
   });
 }

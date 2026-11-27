@@ -78,12 +78,14 @@ class OptionPicker extends StatelessWidget {
 
 /// Several values from one list (Skills, Interests): pick or add values, each shows as a chip that can be removed.
 class MultiOptionPicker extends StatefulWidget {
-  const MultiOptionPicker({super.key, required this.controller, required this.label, required this.options, required this.onAdd, this.icon});
+  const MultiOptionPicker({super.key, required this.controller, required this.label, required this.options, this.onAdd, this.icon});
   final MultiOptionController controller;
   final String label;
   final IconData? icon;
   final List<Opt> options;
-  final Future<Opt?> Function(String title) onAdd;
+
+  /// Null = no Add button (used where values are only chosen, such as filters).
+  final Future<Opt?> Function(String title)? onAdd;
 
   @override
   State<MultiOptionPicker> createState() => _MultiOptionPickerState();
@@ -156,7 +158,7 @@ class _PickerField extends StatefulWidget {
   final IconData? icon;
   final List<Opt> options;
   final Set<String> skip;
-  final Future<Opt?> Function(String title) onAdd;
+  final Future<Opt?> Function(String title)? onAdd;
 
   /// True when the text already shows a picked value (so Add is not offered even before the list refreshes).
   final bool Function() picked;
@@ -181,7 +183,7 @@ class _PickerFieldState extends State<_PickerField> {
     final t = widget.controller.text.trim();
     if (t.isEmpty || _adding) return;
     setState(() => _adding = true);
-    final o = await widget.onAdd(t);
+    final o = await widget.onAdd!(t);
     if (!mounted) return;
     setState(() => _adding = false);
     if (o != null) widget.onSelected(o);
@@ -202,7 +204,7 @@ class _PickerFieldState extends State<_PickerField> {
       valueListenable: widget.controller,
       builder: (context, v, _) {
         final t = v.text.trim();
-        final canAdd = t.isNotEmpty && !widget.picked() && _match(widget.options, t) == null;
+        final canAdd = widget.onAdd != null && t.isNotEmpty && !widget.picked() && _match(widget.options, t) == null;
         return Row(
           children: [
             Expanded(

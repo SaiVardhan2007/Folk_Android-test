@@ -153,7 +153,7 @@ ThemeData buildTheme(Brightness brightness) {
   final scheme = _scheme(brightness);
   final base = ThemeData(useMaterial3: true, colorScheme: scheme, brightness: brightness, fontFamily: kFontFamily, fontFamilyFallback: kFontFallback);
 
-  // Poppins runs wider than Roboto, so sizes are a touch smaller on the scale but still large and readable: body 16sp, nothing below 14sp.
+  // Poppins runs wider than Roboto, so sizes are a touch smaller on the scale but still large and readable: body 16sp, nothing below ~12.5sp.
   TextStyle s(double size, FontWeight w, {double? height, double? spacing}) => TextStyle(
     fontSize: size,
     fontWeight: w,
@@ -163,21 +163,21 @@ ThemeData buildTheme(Brightness brightness) {
     fontFamilyFallback: kFontFallback,
   );
   final textTheme = TextTheme(
-    displayLarge: s(40, FontWeight.w700),
-    displayMedium: s(34, FontWeight.w700),
-    displaySmall: s(30, FontWeight.w700),
-    headlineLarge: s(28, FontWeight.w700),
-    headlineMedium: s(26, FontWeight.w700),
-    headlineSmall: s(23, FontWeight.w600),
-    titleLarge: s(21, FontWeight.w600),
-    titleMedium: s(18, FontWeight.w600),
-    titleSmall: s(16, FontWeight.w600),
-    bodyLarge: s(17, FontWeight.w400, height: 1.45),
-    bodyMedium: s(15.5, FontWeight.w400, height: 1.45),
-    bodySmall: s(14, FontWeight.w400, height: 1.4),
-    labelLarge: s(16, FontWeight.w600, spacing: 0.2),
-    labelMedium: s(14.5, FontWeight.w500, spacing: 0.1),
-    labelSmall: s(14, FontWeight.w500),
+    displayLarge: s(36, FontWeight.w700),
+    displayMedium: s(30, FontWeight.w700),
+    displaySmall: s(27, FontWeight.w700),
+    headlineLarge: s(25, FontWeight.w700),
+    headlineMedium: s(23, FontWeight.w700),
+    headlineSmall: s(21, FontWeight.w600),
+    titleLarge: s(19, FontWeight.w600),
+    titleMedium: s(16.5, FontWeight.w600),
+    titleSmall: s(14.5, FontWeight.w600),
+    bodyLarge: s(15.5, FontWeight.w400, height: 1.45),
+    bodyMedium: s(14, FontWeight.w400, height: 1.4),
+    bodySmall: s(12.5, FontWeight.w400, height: 1.4),
+    labelLarge: s(14.5, FontWeight.w600, spacing: 0.2),
+    labelMedium: s(13, FontWeight.w500, spacing: 0.1),
+    labelSmall: s(12, FontWeight.w500),
   ).apply(bodyColor: scheme.onSurface, displayColor: scheme.onSurface, fontSizeFactor: kTextScale);
 
   final bg = dark ? const Color(0xFF1B120E) : _ivory;
@@ -194,7 +194,7 @@ ThemeData buildTheme(Brightness brightness) {
     scaffoldBackgroundColor: bg,
     // Plain ripple: the default sparkle effect uses a shader that costs frames on mid-range phones.
     splashFactory: InkRipple.splashFactory,
-    visualDensity: VisualDensity.standard,
+    visualDensity: const VisualDensity(horizontal: -1, vertical: -1),
     appBarTheme: AppBarTheme(
       centerTitle: false,
       backgroundColor: dark ? scheme.surface : kMaroon,
@@ -212,7 +212,7 @@ ThemeData buildTheme(Brightness brightness) {
       focusedBorder: border(scheme.primary, 2),
       errorBorder: border(scheme.error),
       focusedErrorBorder: border(scheme.error, 2),
-      contentPadding: const EdgeInsets.symmetric(horizontal: 16, vertical: 16),
+      contentPadding: const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
       labelStyle: textTheme.bodyLarge?.copyWith(color: scheme.onSurfaceVariant),
       floatingLabelStyle: textTheme.bodyMedium?.copyWith(color: scheme.primary, fontWeight: FontWeight.w600),
       hintStyle: textTheme.bodyLarge?.copyWith(color: scheme.outline),
@@ -221,18 +221,18 @@ ThemeData buildTheme(Brightness brightness) {
       prefixIconColor: scheme.onSurfaceVariant,
     ),
     filledButtonTheme: FilledButtonThemeData(
-      style: FilledButton.styleFrom(minimumSize: const Size.fromHeight(56), textStyle: textTheme.labelLarge, shape: shape14, elevation: 0),
+      style: FilledButton.styleFrom(minimumSize: const Size.fromHeight(48), textStyle: textTheme.labelLarge, shape: shape14, elevation: 0),
     ),
     outlinedButtonTheme: OutlinedButtonThemeData(
       style: OutlinedButton.styleFrom(
-        minimumSize: const Size.fromHeight(56),
+        minimumSize: const Size.fromHeight(48),
         textStyle: textTheme.labelLarge,
         shape: shape14,
         side: BorderSide(color: scheme.primary.withValues(alpha: 0.6)),
       ),
     ),
     textButtonTheme: TextButtonThemeData(
-      style: TextButton.styleFrom(minimumSize: const Size(48, 48), textStyle: textTheme.labelLarge),
+      style: TextButton.styleFrom(minimumSize: const Size(44, 44), textStyle: textTheme.labelLarge),
     ),
     cardTheme: CardThemeData(
       elevation: 0,
@@ -250,7 +250,7 @@ ThemeData buildTheme(Brightness brightness) {
       iconColor: scheme.primary,
     ),
     navigationBarTheme: NavigationBarThemeData(
-      height: 74,
+      height: 64,
       backgroundColor: dark ? scheme.surface : Colors.white,
       surfaceTintColor: Colors.transparent,
       indicatorColor: scheme.primaryContainer,
@@ -261,7 +261,7 @@ ThemeData buildTheme(Brightness brightness) {
         ),
       ),
       iconTheme: WidgetStateProperty.resolveWith(
-        (st) => IconThemeData(size: 26, color: st.contains(WidgetState.selected) ? scheme.primary : scheme.onSurfaceVariant),
+        (st) => IconThemeData(size: 24, color: st.contains(WidgetState.selected) ? scheme.primary : scheme.onSurfaceVariant),
       ),
     ),
     navigationRailTheme: NavigationRailThemeData(

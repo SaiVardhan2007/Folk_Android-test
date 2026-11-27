@@ -70,6 +70,12 @@ class AttendanceRepo {
     return ((r['items'] as List?) ?? const []).map((e) => AttendanceItem.fromJson(Map<String, dynamic>.from(e as Map))).toList();
   }
 
+  /// Who was marked on [date] ("YYYY-MM-DD") for [event].
+  Future<List<AttendanceItem>> onDate(String event, String date) async {
+    final r = await _api.get('/attendance/today', query: {'event': event, 'date': date});
+    return ((r['items'] as List?) ?? const []).map((e) => AttendanceItem.fromJson(Map<String, dynamic>.from(e as Map))).toList();
+  }
+
   Future<void> undo(String id) => _api.delete('/attendance/${Uri.encodeComponent(id)}');
 
   Future<MarkResult> mark({

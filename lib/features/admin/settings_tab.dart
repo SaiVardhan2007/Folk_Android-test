@@ -40,7 +40,7 @@ class SettingsTab extends ConsumerWidget {
       children: [
         Text('App settings', style: text.titleLarge),
         const SizedBox(height: 4),
-        const SizedBox(height: 12),
+        const SizedBox(height: 10),
         Card(
           child: ListTile(
             leading: const Icon(Icons.history),
@@ -57,10 +57,10 @@ class SettingsTab extends ConsumerWidget {
             onTap: () => Navigator.of(context, rootNavigator: true).push(MaterialPageRoute<void>(builder: (_) => const DownloadDataScreen())),
           ),
         ),
-        const SizedBox(height: 12),
+        const SizedBox(height: 10),
         s.when(
           loading: () => const Padding(
-            padding: EdgeInsets.all(32),
+            padding: EdgeInsets.all(20),
             child: Center(child: CircularProgressIndicator()),
           ),
           error: (e, _) =>
@@ -98,7 +98,7 @@ class SettingsTab extends ConsumerWidget {
         const SizedBox(height: 16),
         Text('WhatsApp message formats', style: text.titleLarge),
         const SizedBox(height: 4),
-        const SizedBox(height: 12),
+        const SizedBox(height: 10),
         Card(
           child: Padding(
             padding: const EdgeInsets.all(kGapL),
@@ -107,7 +107,7 @@ class SettingsTab extends ConsumerWidget {
               children: [
                 Text('Automatic messages', style: text.titleMedium),
                 const SizedBox(height: 4),
-                const SizedBox(height: 12),
+                const SizedBox(height: 10),
                 if (s.hasValue) ...[
                   _TemplateName(
                     key: ValueKey('welcome_${s.value!['welcome_template']}'),
@@ -116,7 +116,7 @@ class SettingsTab extends ConsumerWidget {
                     value: '${s.value!['welcome_template'] ?? ''}',
                     onSave: (k, v) => _setText(context, ref, k, v),
                   ),
-                  const SizedBox(height: 12),
+                  const SizedBox(height: 10),
                   _TemplateName(
                     key: ValueKey('attendance_${s.value!['attendance_template']}'),
                     label: 'Coordinator alert template',
@@ -130,7 +130,7 @@ class SettingsTab extends ConsumerWidget {
             ),
           ),
         ),
-        const SizedBox(height: 12),
+        const SizedBox(height: 10),
         Card(
           child: Padding(
             padding: const EdgeInsets.all(kGapL),
@@ -139,7 +139,7 @@ class SettingsTab extends ConsumerWidget {
               children: [
                 Text('Send Message button', style: text.titleMedium),
                 const SizedBox(height: 4),
-                const SizedBox(height: 12),
+                const SizedBox(height: 10),
                 const TemplatesEditor(),
               ],
             ),
@@ -148,7 +148,7 @@ class SettingsTab extends ConsumerWidget {
         const SizedBox(height: 16),
         Text('Receipt format', style: text.titleLarge),
         const SizedBox(height: 4),
-        const SizedBox(height: 12),
+        const SizedBox(height: 10),
         if (s.hasValue)
           _ReceiptEditor(
             key: ValueKey(s.value!['receipt'].toString()),

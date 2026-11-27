@@ -5,6 +5,8 @@ import 'dart:math' show Random;
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
+import 'package:flutter_phone_direct_caller/flutter_phone_direct_caller.dart';
+import 'package:url_launcher/url_launcher.dart';
 
 import '../../core/api.dart';
 import '../../core/cache.dart';
@@ -32,6 +34,18 @@ final todayProvider = StreamProvider.autoDispose.family<List<AttendanceItem>, St
   ),
 );
 
+/// Who was marked on an earlier day ("YYYY-MM-DD") for an event.
+final dayProvider = StreamProvider.autoDispose.family<List<AttendanceItem>, ({String event, String date})>(
+  (ref, k) => cachedGet(
+    ref,
+    '/attendance/today',
+    (r) => ((r['items'] as List?) ?? const []).map((e) => AttendanceItem.fromJson(Map<String, dynamic>.from(e as Map))).toList(),
+    query: {'event': k.event, 'date': k.date},
+  ),
+);
+
+String _isoDate(DateTime d) => '${d.year}-${d.month.toString().padLeft(2, '0')}-${d.day.toString().padLeft(2, '0')}';
+
 class AttendanceScreen extends ConsumerStatefulWidget {
   const AttendanceScreen({super.key});
   @override
@@ -47,6 +61,8 @@ class _AttendanceScreenState extends ConsumerState<AttendanceScreen> with Widget
   final _resultsN = ValueNotifier<List<Person>>(const []);
   final _personN = ValueNotifier<Person?>(null); // looked-up registered person
   final _newMobN = ValueNotifier<String?>(null); // a typed number that is not registered
+  final _editN = ValueNotifier<bool>(false); // show every field of the looked-up person (the small edit button)
+  final _dateN = ValueNotifier<DateTime?>(null); // null = today (marking allowed); another day = history, read only
   final _busyN = ValueNotifier<bool>(false);
   final _searchingN = ValueNotifier<bool>(false);
   final _offlineN = ValueNotifier<bool>(false);
@@ -85,7 +101,7 @@ class _AttendanceScreenState extends ConsumerState<AttendanceScreen> with Widget
     _poll?.cancel();
     _search.dispose();
     _form.dispose();
-    for (final n in [_resultsN, _personN, _newMobN, _busyN, _searchingN, _offlineN]) {
+    for (final n in [_resultsN, _personN, _newMobN, _editN, _dateN, _busyN, _searchingN, _offlineN]) {
       n.dispose();
     }
     super.dispose();
@@ -98,6 +114,7 @@ class _AttendanceScreenState extends ConsumerState<AttendanceScreen> with Widget
     _personN.value = null;
     _newMobN.value = null;
     _offlineN.value = false;
+    _editN.value = false;
     _searchingN.value = false;
     _form.clear();
   }
@@ -108,6 +125,7 @@ class _AttendanceScreenState extends ConsumerState<AttendanceScreen> with Widget
     if (_personN.value != null) _personN.value = null;
     if (_newMobN.value != null) _newMobN.value = null;
     if (_offlineN.value) _offlineN.value = false;
+    _editN.value = false;
     if (q.length < 3) {
       _seq++;
       _searchingN.value = false;
@@ -176,13 +194,16 @@ class _AttendanceScreenState extends ConsumerState<AttendanceScreen> with Widget
     try {
       final f = _form.toJson();
       final label = _person?.name ?? _form.name.text.trim();
+      // For a registered person: the fields on screen (the empty ones, or all after the edit button) are saved with the check-in.
+      final shown = isNew || _offlinePerson ? null : _shownFields(_person!);
+      final edits = shown == null ? null : _form.toJson(only: shown);
       final r = await ref
           .read(attendanceRepoProvider)
           .mark(
             mob: mob,
             event: event,
             label: label,
-            edits: null, // existing people are not edited at the attendance desk
+            edits: edits == null || edits.isEmpty ? null : edits,
             register: isNew ? f : null,
             allowQueue: ref.read(bootstrapProvider).value?.offlineEnabled ?? false,
           );
@@ -316,9 +337,29 @@ class _AttendanceScreenState extends ConsumerState<AttendanceScreen> with Widget
     final event = ref.watch(selectedEventProvider);
     final pending = ref.watch(pendingCountProvider);
 
+    return ValueListenableBuilder<DateTime?>(valueListenable: _dateN, builder: (context, day, _) => _page(context, text, event, pending, day));
+  }
+
+  Future<void> _pickDay() async {
+    final now = DateTime.now();
+    final d = await showDatePicker(
+      context: context,
+      initialDate: _dateN.value ?? now,
+      firstDate: DateTime(now.year - 2),
+      lastDate: now,
+      initialEntryMode: DatePickerEntryMode.calendarOnly,
+      helpText: 'Attendance of which day?',
+    );
+    if (d == null || !mounted) return;
+    _reset();
+    _dateN.value = _isoDate(d) == _isoDate(now) ? null : d; // today is the normal marking view
+  }
+
+  Widget _page(BuildContext context, TextTheme text, String? event, int pending, DateTime? day) {
+    final history = day != null;
     return RefreshIndicator(
       onRefresh: () async {
-        if (event != null) ref.invalidate(todayProvider(event));
+        if (event != null) ref.invalidate(history ? dayProvider((event: event, date: _isoDate(day))) : todayProvider(event));
         await ref.read(pendingCountProvider.notifier).sync();
       },
       child: CustomScrollView(
@@ -343,58 +384,83 @@ class _AttendanceScreenState extends ConsumerState<AttendanceScreen> with Widget
                       child: const Text('Sync now'),
                     ),
                   ),
-                  const SizedBox(height: 12),
+                  const SizedBox(height: 10),
                 ],
-                const EventPicker(),
-                const SizedBox(height: 14),
-                _SearchBox(controller: _search, searching: _searchingN, onChanged: _onChanged, onClear: _reset),
+                Row(
+                  children: [
+                    const Expanded(child: EventPicker()),
+                    const SizedBox(width: 8),
+                    Tooltip(
+                      message: 'Attendance history',
+                      child: IconButton.filledTonal(onPressed: _pickDay, icon: const Icon(Icons.history_rounded)),
+                    ),
+                  ],
+                ),
                 const SizedBox(height: 10),
-                ValueListenableBuilder<List<Person>>(
-                  valueListenable: _resultsN,
-                  builder: (context, results, _) => ValueListenableBuilder<Person?>(
-                    valueListenable: _personN,
-                    builder: (context, person, _) => results.isEmpty || person != null
-                        ? const SizedBox.shrink()
-                        : Card(
-                            child: Column(
-                              children: [
-                                for (final p in results)
-                                  ListTile(
-                                    leading: CircleAvatar(
-                                      backgroundColor: Theme.of(context).colorScheme.primaryContainer,
-                                      child: Text(p.name.isEmpty ? '?' : p.name[0].toUpperCase(), style: text.titleSmall),
-                                    ),
-                                    title: Text(p.name, style: text.titleSmall),
-                                    onTap: () {
-                                      _search.text = p.mob;
-                                      _lookup(p.mob);
-                                    },
-                                  ),
-                              ],
-                            ),
-                          ),
+                if (history) ...[
+                  StatusBanner(
+                    icon: Icons.lock_clock_outlined,
+                    text: 'Viewing ${_isoDate(day)}. Attendance can only be marked for today.',
+                    action: TextButton(onPressed: () => _dateN.value = null, child: const Text('Today')),
                   ),
+                  const SizedBox(height: 10),
+                ] else ...[
+                  _SearchBox(controller: _search, searching: _searchingN, onChanged: _onChanged, onClear: _reset),
+                  const SizedBox(height: 10),
+                ],
+                if (!history)
+                  ValueListenableBuilder<List<Person>>(
+                    valueListenable: _resultsN,
+                    builder: (context, results, _) => ValueListenableBuilder<Person?>(
+                      valueListenable: _personN,
+                      builder: (context, person, _) => results.isEmpty || person != null
+                          ? const SizedBox.shrink()
+                          : Card(
+                              child: Column(
+                                children: [
+                                  for (final p in results)
+                                    ListTile(
+                                      leading: CircleAvatar(
+                                        backgroundColor: Theme.of(context).colorScheme.primaryContainer,
+                                        child: Text(p.name.isEmpty ? '?' : p.name[0].toUpperCase(), style: text.titleSmall),
+                                      ),
+                                      title: Text(p.name, style: text.titleSmall),
+                                      onTap: () {
+                                        _search.text = p.mob;
+                                        _lookup(p.mob);
+                                      },
+                                    ),
+                                ],
+                              ),
+                            ),
+                    ),
+                  ),
+                if (!history)
+                  ListenableBuilder(
+                    listenable: Listenable.merge([_personN, _newMobN, _offlineN, _editN, _busyN]),
+                    builder: (context, _) {
+                      final boot = ref.read(bootstrapProvider).value;
+                      if (_personN.value != null) return _markCard(text, boot, _personN.value!, isNew: false);
+                      if (_newMobN.value != null) return _markCard(text, boot, null, isNew: true);
+                      return const SizedBox.shrink();
+                    },
+                  ),
+                SectionTitle(
+                  history ? 'Attendance on ${_isoDate(day)}' : "Today's attendance",
+                  trailing: event == null ? null : _PresentCount(event: event, date: history ? _isoDate(day) : null),
                 ),
-                ListenableBuilder(
-                  listenable: Listenable.merge([_personN, _newMobN, _offlineN, _busyN]),
-                  builder: (context, _) {
-                    final boot = ref.read(bootstrapProvider).value;
-                    if (_personN.value != null) return _markCard(text, boot, _personN.value!, isNew: false);
-                    if (_newMobN.value != null) return _markCard(text, boot, null, isNew: true);
-                    return const SizedBox.shrink();
-                  },
-                ),
-                SectionTitle("Today's attendance", trailing: event == null ? null : _PresentCount(event: event)),
               ]),
             ),
           ),
           if (event == null)
             const SliverToBoxAdapter(
               child: Padding(
-                padding: EdgeInsets.all(24),
+                padding: EdgeInsets.all(16),
                 child: Center(child: Text('Choose an event')),
               ),
             )
+          else if (history)
+            _DaySliver(event: event, date: _isoDate(day))
           else
             _TodaySliver(event: event, onUndo: _undo),
           const SliverToBoxAdapter(child: SizedBox(height: 24)),
@@ -402,6 +468,28 @@ class _AttendanceScreenState extends ConsumerState<AttendanceScreen> with Widget
       ),
     );
   }
+
+  /// The fields shown for a registered person: all of them after the edit button, otherwise only the empty ones.
+  Set<String> _shownFields(Person p) => _editN.value
+      ? {
+          'name',
+          'gender',
+          'level',
+          'occupation',
+          'college',
+          'branch',
+          'pg',
+          'area',
+          'guide',
+          'dob',
+          'stay',
+          'skills',
+          'interests',
+          'chanting',
+          'feedback',
+          'comments',
+        }
+      : unfilledFields(p);
 
   Widget _markCard(TextTheme text, Bootstrap? boot, Person? p, {required bool isNew}) => Card(
     child: Padding(
@@ -424,6 +512,13 @@ class _AttendanceScreenState extends ConsumerState<AttendanceScreen> with Widget
                     style: text.titleSmall,
                   ),
                 ),
+                if (!isNew && !_offlinePerson)
+                  IconButton(
+                    tooltip: _editN.value ? 'Show only empty details' : 'Edit details',
+                    visualDensity: VisualDensity.compact,
+                    icon: Icon(_editN.value ? Icons.close : Icons.edit_outlined, size: 20),
+                    onPressed: () => _editN.value = !_editN.value,
+                  ),
               ],
             ),
             if (!isNew && !_offlinePerson)
@@ -439,9 +534,20 @@ class _AttendanceScreenState extends ConsumerState<AttendanceScreen> with Widget
                   style: text.bodyMedium,
                 ),
               ),
-            const SizedBox(height: 14),
-            if (_offlinePerson) Text('Offline: will be sent later', style: text.bodyMedium) else if (isNew) PersonFields(form: _form, boot: boot),
-            const SizedBox(height: 12),
+            const SizedBox(height: 10),
+            if (_offlinePerson)
+              Text('Offline: will be sent later', style: text.bodyMedium)
+            else if (isNew)
+              PersonFields(form: _form, boot: boot)
+            else if (_shownFields(p!).isNotEmpty) ...[
+              if (!_editN.value)
+                Padding(
+                  padding: const EdgeInsets.only(bottom: 10),
+                  child: Text('Not filled yet (optional):', style: text.labelLarge),
+                ),
+              PersonFields(form: _form, boot: boot, requireLevel: false, only: _shownFields(p)),
+            ],
+            const SizedBox(height: 10),
             FilledButton.icon(
               onPressed: _busyN.value ? null : () => _mark(isNew: isNew),
               icon: _busyN.value
@@ -506,11 +612,14 @@ class _SearchBox extends StatelessWidget {
 }
 
 class _PresentCount extends ConsumerWidget {
-  const _PresentCount({required this.event});
+  const _PresentCount({required this.event, this.date});
   final String event;
+  final String? date; // null = today
   @override
   Widget build(BuildContext context, WidgetRef ref) {
-    final n = ref.watch(todayProvider(event).select((v) => v.value?.length));
+    final n = date == null
+        ? ref.watch(todayProvider(event).select((v) => v.value?.length))
+        : ref.watch(dayProvider((event: event, date: date!)).select((v) => v.value?.length));
     return n == null ? const SizedBox.shrink() : Chip(avatar: const Icon(Icons.groups_rounded, size: 20), label: Text('$n present'));
   }
 }
@@ -530,7 +639,7 @@ class _TodaySliver extends ConsumerWidget {
     return today.when(
       loading: () => const SliverToBoxAdapter(
         child: Padding(
-          padding: EdgeInsets.all(32),
+          padding: EdgeInsets.all(20),
           child: Center(child: CircularProgressIndicator()),
         ),
       ),
@@ -540,7 +649,7 @@ class _TodaySliver extends ConsumerWidget {
       data: (items) => items.isEmpty
           ? SliverToBoxAdapter(
               child: Padding(
-                padding: const EdgeInsets.all(24),
+                padding: const EdgeInsets.all(16),
                 child: Center(child: Text('No one marked yet today.', style: text.bodyLarge)),
               ),
             )
@@ -574,5 +683,73 @@ class _TodaySliver extends ConsumerWidget {
               ),
             ),
     );
+  }
+}
+
+/// Calls [mob] straight away (no dialer screen) in the Android app; on the website it opens the device's dialer instead.
+Future<void> dialNow(String mob) async {
+  final number = '+91$mob';
+  if (!kIsWeb && await FlutterPhoneDirectCaller.callNumber(number) == true) return;
+  await launchUrl(Uri.parse('tel:$number'));
+}
+
+/// An earlier day's list (read only). Only the phone icon calls; tapping the row does nothing.
+class _DaySliver extends ConsumerWidget {
+  const _DaySliver({required this.event, required this.date});
+  final String event, date;
+
+  @override
+  Widget build(BuildContext context, WidgetRef ref) {
+    final text = Theme.of(context).textTheme;
+    final key = (event: event, date: date);
+    return ref
+        .watch(dayProvider(key))
+        .when(
+          loading: () => const SliverToBoxAdapter(
+            child: Padding(
+              padding: EdgeInsets.all(32),
+              child: Center(child: CircularProgressIndicator()),
+            ),
+          ),
+          error: (e, _) => SliverToBoxAdapter(
+            child: ErrorView(message: e is ApiException ? e.message : 'Could not load the list.', onRetry: () => ref.invalidate(dayProvider(key))),
+          ),
+          data: (items) => items.isEmpty
+              ? SliverToBoxAdapter(
+                  child: Padding(
+                    padding: const EdgeInsets.all(24),
+                    child: Center(child: Text('No attendance was marked on this day.', style: text.bodyLarge)),
+                  ),
+                )
+              : SliverPadding(
+                  padding: const EdgeInsets.symmetric(horizontal: kPagePadding),
+                  sliver: SliverList.separated(
+                    itemCount: items.length,
+                    separatorBuilder: (_, _) => const SizedBox(height: 8),
+                    itemBuilder: (context, i) {
+                      final it = items[i];
+                      return RepaintBoundary(
+                        child: Card(
+                          child: ListTile(
+                            leading: CircleAvatar(
+                              backgroundColor: context.colors.success.withValues(alpha: 0.14),
+                              child: Icon(Icons.check_rounded, color: context.colors.success),
+                            ),
+                            title: Text(it.name.isEmpty ? it.mob : it.name),
+                            subtitle: Text('${it.mob}  •  ${shortTime(it.ts)}${it.markedBy.isEmpty ? '' : '  •  by ${it.markedBy}'}'),
+                            trailing: it.mob.isEmpty
+                                ? null
+                                : IconButton(
+                                    tooltip: 'Call ${it.mob}',
+                                    icon: Icon(Icons.call, color: context.colors.success),
+                                    onPressed: () => dialNow(it.mob),
+                                  ),
+                          ),
+                        ),
+                      );
+                    },
+                  ),
+                ),
+        );
   }
 }

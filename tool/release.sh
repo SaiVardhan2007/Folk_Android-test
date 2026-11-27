@@ -47,14 +47,14 @@ APK=build/app/outputs/flutter-apk/app-release.apk
 
 # 5. Backend, then the website (same code as the app; index.html is never cached, so browsers load the new release on the next visit)
 run bash -c 'cd backend && npx wrangler deploy'
-run flutter build web --release
+run flutter build web --release --no-tree-shake-icons   # full icon font: its file name never changes, so a browser-cached older copy must still contain every icon
 run backend/node_modules/.bin/wrangler pages deploy build/web --project-name folk-web --branch main --commit-dirty=true
 
 # 6. Git: commit everything, tag, push
 run git add -A
 run git commit -m "Release $NEW_NAME (build $NEW_BUILD): $MSG
 
-Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>"
+Co-Authored-By: Claude Sonnet 5.5 <noreply@anthropic.com>"
 run git tag "$TAG"
 run git push "$(git config branch.main.remote)" main "$TAG"   # the remote main tracks (devshare)
 

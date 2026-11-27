@@ -67,7 +67,7 @@ const isDuplicate = (e: unknown) => e instanceof ErpError && (e.status === 409 |
 const erpOf = (c: Ctx) => new Erp(c.env);
 
 type Row = {
-  name: string; mob_no: string; full_name: string; gender?: string; level?: string; occupation?: string; pg?: string | null; pg_title?: string | null; dob?: string | null;
+  name: string; mob_no: string; full_name: string; gender?: string; level?: string; occupation?: string; pg?: string | null; pg_title?: string | null; area?: string | null; area_title?: string | null; dob?: string | null;
   college?: string | null; college_title?: string | null; branch?: string | null; branch_title?: string | null;
   event_code?: string; user_tag?: string; is_active?: number; attendance_count?: number; last_attended_on?: string | null;
   registered_by?: string; reset_code_hash?: string; reset_code_expires?: string; reset_attempts?: number; creation?: string; registered_on?: string;
@@ -75,7 +75,7 @@ type Row = {
   age?: number; current_stay?: string; chanting_rounds?: number; feedback?: string; comments?: string;
 };
 // College / Company and Branch are stored as IDs; their titles are read through the link ("college.title"), so a title edited in ERPNext shows everywhere at once.
-const PERSON_FIELDS = ["name", "mob_no", "full_name", "gender", "level", "occupation", "college", "college.title as college_title", "branch", "branch.title as branch_title", "pg", "pg.title as pg_title", "event_code", "user_tag", "is_active", "attendance_count", "last_attended_on", "registered_by", "creation", "venue", "guide", "guide.title as guide_title", "guide.mobile as guide_mobile", "registered_on", "age", "dob", "current_stay", "chanting_rounds", "feedback", "comments"];
+const PERSON_FIELDS = ["name", "mob_no", "full_name", "gender", "level", "occupation", "college", "college.title as college_title", "branch", "branch.title as branch_title", "pg", "pg.title as pg_title", "area", "area.title as area_title", "event_code", "user_tag", "is_active", "attendance_count", "last_attended_on", "registered_by", "creation", "venue", "guide", "guide.title as guide_title", "guide.mobile as guide_mobile", "registered_on", "age", "dob", "current_stay", "chanting_rounds", "feedback", "comments"];
 const AUTH_FIELDS = [...PERSON_FIELDS, "reset_code_hash", "reset_code_expires", "reset_attempts"];
 
 /** Skills and interests of a person (child tables), as {id, title}. */
@@ -92,10 +92,10 @@ const publicPerson = (r: Row, m: Multi = NO_MULTI) => ({
   profession: r.college_title ?? "", college_id: r.college ?? "", branch: r.branch_title ?? "", branch_id: r.branch ?? "",
   skills: m.skills.map((o) => o.title).join(", "), skill_list: m.skills,
   interests: m.interests.map((o) => o.title).join(", "), interest_list: m.interests,
-  pg_name: r.pg_title ?? "", pg_id: r.pg ?? "", event_code: r.event_code ?? "", tag: r.user_tag || "Public",
+  pg_name: r.pg_title ?? "", pg_id: r.pg ?? "", area_name: r.area_title ?? "", area_id: r.area ?? "", event_code: r.event_code ?? "", tag: r.user_tag || "Public",
   is_active: r.is_active !== 0, attendance_count: r.attendance_count ?? 0, last_attended_on: r.last_attended_on ?? "",
   registered_by: r.registered_by ?? "", joined: (r.registered_on || r.creation || "").slice(0, 10),
-  venue: r.venue ?? "",
+  venue: r.area_title ?? "", // the old typed area is retired; this name is what older apps read
   guide: (r.guide_title ?? "").toUpperCase(), guide_id: r.guide ?? "", guide_mobile: r.guide_mobile ?? "",
   // The FOLK guide used to be typed per person; app 1.0.7 still reads these names.
   folk_guide: (r.guide_title ?? "").toUpperCase(), fg_name: (r.guide_title ?? "").toUpperCase(), fg_mob: r.guide_mobile ?? "", call_no: "",
@@ -265,7 +265,7 @@ async function body(c: Ctx): Promise<Record<string, unknown>> {
 function details(b: Record<string, unknown>) {
   return {
     gender: pick(b.gender, GENDERS), level: pick(b.level, LEVELS), occupation: pick(b.occupation, OCCUPATIONS),
-    venue: clean(b.venue, 200), dob: dateOfBirth(b.dob),
+    dob: dateOfBirth(b.dob),
     // Numbers and flags are only included when sent, so an edit that leaves them out can never reset them.
     age: intIn(b.age, 1, 120), chanting_rounds: intIn(b.chanting_rounds, 0, 1000),
     current_stay: pick(b.current_stay, STAYS), feedback: pick(b.feedback, FEEDBACKS),
@@ -340,6 +340,14 @@ async function publicCollege(c: Ctx, b: Record<string, unknown>): Promise<string
   return hit ? hit.id : optionId(c, "college", OTHERS);
 }
 
+/** Area of stay from the public form: an existing area or "Others" (never a new value), like the college. */
+async function publicArea(c: Ctx, b: Record<string, unknown>): Promise<string> {
+  const id = clean(b.area_id, 40);
+  if (!id) return "";
+  if (id === "other") return optionId(c, "area", OTHERS);
+  return knownId(c, "area", id);
+}
+
 /** An ID sent by the app must exist in that list. */
 async function knownId(c: Ctx, list: ListName, raw: unknown): Promise<string> {
   const id = clean(raw, 40);
@@ -356,7 +364,7 @@ async function knownId(c: Ctx, list: ListName, raw: unknown): Promise<string> {
  */
 async function listFields(c: Ctx, b: Record<string, unknown>, clear: boolean): Promise<Record<string, unknown>> {
   const out: Record<string, unknown> = {};
-  const one = async (field: "college" | "branch" | "pg", idKey: string, textKey: string) => {
+  const one = async (field: "college" | "branch" | "pg" | "area", idKey: string, textKey: string) => {
     const id = typeof b[idKey] === "string" ? await knownId(c, field, b[idKey]) : typeof b[textKey] === "string" ? await optionId(c, field, b[textKey]) : undefined;
     if (id === undefined || (!id && !clear)) return;
     out[field] = id || null;
@@ -370,7 +378,7 @@ async function listFields(c: Ctx, b: Record<string, unknown>, clear: boolean): P
     if (!unique.length && !clear) return;
     out[MULTI[list].field] = unique.map((id) => ({ [MULTI[list].link]: id }));
   };
-  await Promise.all([one("college", "college_id", "profession"), one("branch", "branch_id", "branch"), one("pg", "pg_id", "pg_name"), many("skill", "skill_ids", "skills"), many("interest", "interest_ids", "interests")]);
+  await Promise.all([one("college", "college_id", "profession"), one("branch", "branch_id", "branch"), one("pg", "pg_id", "pg_name"), one("area", "area_id", "area_name"), many("skill", "skill_ids", "skills"), many("interest", "interest_ids", "interests")]);
   return { ...out, ...(await guideField(c, b)) };
 }
 
@@ -527,7 +535,7 @@ const isStaff = (s: Session) => s.tag === "Admin" || s.tag === "Coordinator";
 const needAdmin = (c: Ctx) => { if (!isAdmin(c.get("session"))) throw new HttpError(403, "Admin access required."); };
 const needStaff = (c: Ctx) => { if (!isStaff(c.get("session"))) throw new HttpError(403, "Not allowed."); };
 
-for (const p of ["/me", "/bootstrap", "/options", "/options/*", "/events", "/home", "/people", "/people/*", "/attendance", "/attendance/*", "/my/*", "/print/jobs", "/print/status", "/registrations", "/admin/*", "/reports/*"]) app.use(p, requireSession);
+for (const p of ["/me", "/bootstrap", "/options", "/options/*", "/events", "/home", "/people", "/people/*", "/attendance", "/attendance/*", "/my/*", "/calls/*", "/devices", "/devices/*", "/print/jobs", "/print/status", "/registrations", "/admin/*", "/reports/*"]) app.use(p, requireSession);
 
 // ---------- app update notice (public: a phone must learn it is out of date even before sign-in)
 /** Phones are given OUR address for the APK (not the host's own link), so the Update button never opens another app such as GitHub's, which asks to sign in. */
@@ -774,27 +782,70 @@ const SORTS: Record<string, string> = {
   newest: "registered_on desc, creation desc", oldest: "registered_on asc, creation asc", name: "full_name asc", most: "attendance_count desc", recent: "last_attended_on desc",
 };
 
+/** A list sent as "a,b,c" (IDs or fixed values), cleaned and capped. */
+const listParam = (v: string | undefined, max = 50) => [...new Set((v ?? "").split(",").map((x) => clean(x, 60)).filter(Boolean))].slice(0, max);
+/** Fields whose "not filled in" state can be asked for (`missing=dob,college`). */
+const MISSING_FIELDS: Record<string, string> = {
+  gender: "gender", level: "level", occupation: "occupation", college: "college", branch: "branch", pg: "pg", area: "area", guide: "guide", dob: "dob",
+  stay: "current_stay", feedback: "feedback", comments: "comments", chanting: "chanting_rounds",
+};
+const ageToDob = (age: number, today: string) => { const [y, m, d] = today.split("-").map(Number); return `${String(y - age).padStart(4, "0")}-${String(m).padStart(2, "0")}-${String(d).padStart(2, "0")}`; };
+
+/**
+ * The People table's filters. Every filter is a list of allowed values ("a,b,c" = any of them), and all filters must hold.
+ * Dropdown values (college, branch, pg, area, guide) are IDs. `missing` lists fields that must be empty. Skills and interests are
+ * answered by one lookup in their child table, then become a plain "name in (...)" filter.
+ */
 function peopleQuery(q: Record<string, string | undefined>) {
   const f: Filters = [];
   const v = (k: string) => clean(q[k], 60);
-  if (v("tag")) f.push(["user_tag", "=", v("tag")]);
-  if (pick(v("level"), LEVELS)) f.push(["level", "=", v("level")]);
-  if (pick(v("gender"), GENDERS)) f.push(["gender", "=", v("gender")]);
-  if (v("event")) f.push(["event_code", "=", v("event")]);
+  const anyOf = (param: string, field: string, allowed?: readonly string[]) => {
+    const vals = listParam(q[param]).filter((x) => !allowed || (allowed as readonly string[]).includes(x));
+    if (vals.length) f.push([field, "in", vals]);
+  };
+  anyOf("tag", "user_tag"); anyOf("level", "level", LEVELS); anyOf("gender", "gender", GENDERS); anyOf("occupation", "occupation", OCCUPATIONS);
+  anyOf("stay", "current_stay", STAYS); anyOf("feedback", "feedback", FEEDBACKS); anyOf("event", "event_code");
+  anyOf("college", "college"); anyOf("branch", "branch"); anyOf("pg", "pg"); anyOf("area", "area"); anyOf("guide", "guide"); anyOf("registered_by", "registered_by");
+  for (const m of listParam(q.missing, 20)) { const field = MISSING_FIELDS[m]; if (field) f.push([field, m === "chanting" ? "=" : "is", m === "chanting" ? 0 : "not set"]); }
   if (v("pending") === "1") { f.push(["is_active", "=", 0]); f.push(["registered_by", "=", "self sign-up"]); f.push(["user_tag", "not in", CONTACT_TAGS]); }
+  if (v("active") === "1") f.push(["is_active", "=", 1]);
+  if (v("active") === "0") f.push(["is_active", "=", 0]);
   if (v("att") === "yes") f.push(["attendance_count", ">", 0]);
   if (v("att") === "no") f.push(["attendance_count", "=", 0]);
+  const sessions = whole(v("sessions_min")); if (sessions) f.push(["attendance_count", ">=", sessions]);
+  const sessionsMax = whole(v("sessions_max")); if (sessionsMax) f.push(["attendance_count", "<=", sessionsMax]);
   if (DATE_RE.test(v("from"))) f.push(["registered_on", ">=", v("from")]);
   if (DATE_RE.test(v("to"))) f.push(["registered_on", "<=", v("to")]);
+  if (DATE_RE.test(v("att_from"))) f.push(["last_attended_on", ">=", v("att_from")]);
+  if (DATE_RE.test(v("att_to"))) f.push(["last_attended_on", "<=", v("att_to")]);
+  // Age from the date of birth: "at least" means born on or before that day, "at most" means born after the day a year earlier.
+  const today = istToday();
+  const ageMin = whole(v("age_min")), ageMax = whole(v("age_max"));
+  if (ageMin || ageMax) f.push(["dob", "is", "set"]); // an empty date counts as the earliest date, so people without one must be excluded explicitly
+  if (ageMin) f.push(["dob", "<=", ageToDob(ageMin, today)]);
+  if (ageMax) f.push(["dob", ">", ageToDob(ageMax + 1, today)]);
   const s = v("q").replace(/[%_]/g, "");
   const or: Filters | undefined = s ? [["full_name", "like", `%${s}%`], ["mob_no", "like", `%${s}%`]] : undefined;
-  return { filters: f, or_filters: or, order_by: SORTS[v("sort")] ?? SORTS.newest, page: Math.max(1, parseInt(v("page")) || 1) };
+  return { filters: f, or_filters: or, order_by: SORTS[v("sort")] ?? SORTS.newest, page: Math.max(1, parseInt(v("page")) || 1), skills: listParam(q.skill), interests: listParam(q.interest) };
+}
+
+/** Adds the skill / interest filters (people who have ANY of the chosen values) as a name list. Returns false when nobody can match. */
+async function withMultiFilters(erp: Erp, q: ReturnType<typeof peopleQuery>): Promise<boolean> {
+  for (const [ids, list] of [[q.skills, "skill"], [q.interests, "interest"]] as const) {
+    if (!ids.length) continue;
+    const rows = await erp.list<{ parent: string }>(MULTI[list].child, ["parent"], [["parenttype", "=", PERSON], [MULTI[list].link, "in", ids]], { parent: PERSON, limit_page_length: 0 });
+    const names = [...new Set(rows.map((r) => r.parent))];
+    if (!names.length) return false;
+    q.filters.push(["name", "in", names]);
+  }
+  return true;
 }
 
 app.get("/admin/people", async (c) => {
   needAdmin(c);
   const q = peopleQuery(c.req.query());
   const erp = erpOf(c);
+  if (!(await withMultiFilters(erp, q))) return c.json({ page: q.page, page_size: PAGE_SIZE, total: 0, people: [] });
   const extra = q.or_filters ? { or_filters: q.or_filters } : {};
   const [rows, tot] = await Promise.all([
     erp.list<Row>(PERSON, PERSON_FIELDS, q.filters, { ...extra, order_by: q.order_by, limit_page_length: PAGE_SIZE, limit_start: (q.page - 1) * PAGE_SIZE }),
@@ -827,7 +878,6 @@ app.put("/admin/people/:mob", async (c) => {
   const whole = (key: string, min: number, max: number) => { if (b[key] !== undefined) patch[key] = intIn(b[key], min, max) ?? 0; };
   if (typeof b.name === "string") { if (!clean(b.name)) throw bad("Enter the name."); patch.full_name = clean(b.name); }
   Object.assign(patch, await listFields(c, b, true));
-  text("venue", "venue", 200);
   if (typeof b.dob === "string") { const d = dateOfBirth(b.dob); if (b.dob && !d) throw bad("Enter a valid date of birth."); patch.dob = d ?? null; }
   text("comments", "comments", 500);
   choice("gender", GENDERS); choice("level", LEVELS); choice("occupation", OCCUPATIONS); choice("current_stay", STAYS); choice("feedback", FEEDBACKS);
@@ -972,14 +1022,14 @@ app.get("/admin/export/people", async (c) => {
   needAdmin(c);
   const q = peopleQuery(c.req.query());
   const erp = erpOf(c);
-  const rows = await erp.list<Row>(PERSON, PERSON_FIELDS, q.filters, { ...(q.or_filters && { or_filters: q.or_filters }), order_by: q.order_by, limit_page_length: 0 });
+  const rows = (await withMultiFilters(erp, q)) ? await erp.list<Row>(PERSON, PERSON_FIELDS, q.filters, { ...(q.or_filters && { or_filters: q.or_filters }), order_by: q.order_by, limit_page_length: 0 }) : [];
   const multi = await loadMulti(erp, rows.map((r) => r.name));
   const out = rows.map((r) => {
     const m = multi.get(r.name) ?? NO_MULTI;
-    return { ...r, college: r.college_title ?? "", branch: r.branch_title ?? "", pg_name: r.pg_title ?? "", age: ageOn(r.dob, istToday()) ?? r.age ?? "", guide: (r.guide_title ?? "").toUpperCase(), skills: m.skills.map((o) => o.title).join(", "), interests: m.interests.map((o) => o.title).join(", ") };
+    return { ...r, college: r.college_title ?? "", branch: r.branch_title ?? "", pg_name: r.pg_title ?? "", area: r.area_title ?? "", age: ageOn(r.dob, istToday()) ?? r.age ?? "", guide: (r.guide_title ?? "").toUpperCase(), skills: m.skills.map((o) => o.title).join(", "), interests: m.interests.map((o) => o.title).join(", ") };
   });
   return csvResponse(c, "folk-people.csv", csv(
-    ["mob_no", "full_name", "gender", "level", "occupation", "college", "branch", "pg_name", "venue", "guide", "guide_mobile", "event_code", "user_tag", "attendance_count", "last_attended_on", "registered_by", "registered_on", "dob", "age", "current_stay", "skills", "interests", "chanting_rounds", "feedback", "comments"], out));
+    ["mob_no", "full_name", "gender", "level", "occupation", "college", "branch", "pg_name", "area", "guide", "guide_mobile", "event_code", "user_tag", "attendance_count", "last_attended_on", "registered_by", "registered_on", "dob", "age", "current_stay", "skills", "interests", "chanting_rounds", "feedback", "comments"], out));
 });
 
 app.get("/reports/attendance", async (c) => {
@@ -1098,7 +1148,7 @@ app.get("/my/calls", async (c) => {
   const since = new Date(Date.now() + 5.5 * 3600_000 - 28 * 86400_000).toISOString().replace("T", " ").slice(0, 19);
   type PInfo = { name: string; level?: string; venue?: string; pg_name?: string; profession?: string; attendance_count?: number; last_attended_on?: string };
   const [people, counts, events, templates] = await Promise.all([
-    Promise.all(chunk(ids, 100).map((ch) => erp.list<PInfo>(PERSON, ["name", "level", "venue", "pg.title as pg_name", "college.title as profession", "attendance_count", "last_attended_on"], [["name", "in", ch]]))),
+    Promise.all(chunk(ids, 100).map((ch) => erp.list<PInfo>(PERSON, ["name", "level", "area.title as venue", "pg.title as pg_name", "college.title as profession", "attendance_count", "last_attended_on"], [["name", "in", ch]]))),
     Promise.all(chunk(ids, 100).map((ch) => erp.list<{ person: string; n: number }>(LOG, aggregate({ COUNT: "*", as: "n" }, "person"), [["person", "in", ch], ["called_at", ">=", since]], { group_by: "person" }))),
     loadEvents(c), loadTemplates(c),
   ]);
@@ -1147,12 +1197,19 @@ app.get("/calls/progress", async (c) => {
   const weekly = !!(await loadEvents(c)).find((e) => e.code === event)?.weekly;
   type N = { coordinator: string; status: string; n: number };
   const count = (f: Filters) => erp.list<N>(ASG, aggregate({ COUNT: "*", as: "n" }, "coordinator", "status"), [["event_code", "=", event], ...f], { group_by: "coordinator, status" });
-  const [rows, names] = await Promise.all([
+  // Is each coordinator calling in time? The latest call they made, and how long their oldest waiting contact has been waiting.
+  const edge = (fn: "MAX" | "MIN", field: string, as: string, f: Filters) =>
+    erp.list<{ coordinator: string } & Record<string, string>>(ASG, aggregate({ [fn]: field, as }, "coordinator"), [["event_code", "=", event], ...f], { group_by: "coordinator" });
+  const [rows, names, lasts, waits] = await Promise.all([
     weekly
       ? Promise.all([count([["status", "=", PENDING]]), count([["status", "!=", PENDING], ["submitted_at", ">=", `${istWeek().from} 00:00:00`]])]).then((p) => p.flat())
       : count([]),
     erp.list<{ name: string; full_name: string }>(PERSON, ["name", "full_name"], [["user_tag", "in", ["Coordinator", "Admin"]]]),
+    edge("MAX", "submitted_at", "at", [["status", "!=", PENDING]]),
+    edge("MIN", "assigned_at", "at", [["status", "=", PENDING]]),
   ]);
+  const lastCall = new Map(lasts.map((x) => [x.coordinator, x.at ?? ""]));
+  const waitingSince = new Map(waits.map((x) => [x.coordinator, x.at ?? ""]));
   const nm = new Map(names.map((x) => [x.name, x.full_name]));
   const by = new Map<string, { id: string; name: string; done: number; pending: number }>();
   for (const r of rows) {
@@ -1161,10 +1218,30 @@ app.get("/calls/progress", async (c) => {
     by.set(r.coordinator, x);
   }
   const pct = (done: number, total: number) => (total ? Math.round((done / total) * 100) : 0);
-  const coordinators = [...by.values()].map((x) => ({ ...x, assigned: x.done + x.pending, percent: pct(x.done, x.done + x.pending), complete: x.pending === 0 }))
+  const coordinators = [...by.values()].map((x) => ({ ...x, assigned: x.done + x.pending, percent: pct(x.done, x.done + x.pending), complete: x.pending === 0, last_call: lastCall.get(x.id) ?? "", waiting_since: waitingSince.get(x.id) ?? "" }))
     .sort((a, b) => b.percent - a.percent || b.done - a.done || a.name.localeCompare(b.name));
   const done = coordinators.reduce((t, x) => t + x.done, 0), pending = coordinators.reduce((t, x) => t + x.pending, 0);
   return c.json({ totals: { assigned: done + pending, done, pending, percent: pct(done, done + pending) }, coordinators });
+});
+
+/**
+ * The contacts handed to one coordinator for an event, with each one's state: still waiting, or called (and when). Staff only.
+ * Names only, never phone numbers (like the progress list). A weekly event shows what is waiting plus what was called this week.
+ */
+app.get("/calls/coordinator", async (c) => {
+  staffOnly(c);
+  const event = clean(c.req.query("event"), 60);
+  const who = clean(c.req.query("id"), 60);
+  if (!event || !who) throw bad("event and id are required");
+  const erp = erpOf(c);
+  const weekly = !!(await loadEvents(c)).find((e) => e.code === event)?.weekly;
+  const rows = await erp.list<Asg>(ASG, ASG_FIELDS, [["event_code", "=", event], ["coordinator", "=", who]], { order_by: "assigned_at asc", limit_page_length: 0 });
+  const from = weekly ? `${istWeek().from} 00:00:00` : "";
+  const contacts = rows
+    .filter((r) => r.status === PENDING || !from || (r.submitted_at ?? "") >= from)
+    .map((r) => ({ id: r.name, name: r.person_name, status: r.status, pending: r.status === PENDING, follow_up: !!r.is_follow_up, assigned_at: r.assigned_at ?? "", called_at: r.status === PENDING ? "" : r.submitted_at ?? "" }));
+  const [p] = await erp.list<{ full_name: string }>(PERSON, ["full_name"], [["name", "=", who]], { limit_page_length: 1 });
+  return c.json({ name: p?.full_name ?? "Earlier system (imported)", contacts });
 });
 
 /** One call outcome. Safe to retry: client_ref is unique, so the log can never get a second row for the same tap. */
@@ -1237,7 +1314,7 @@ app.get("/admin/callers", async (c) => {
   }
   return c.json({
     statuses: STATUSES.filter((x) => x !== PENDING),
-    callers: people.map((p) => ({ id: p.name, mob: p.mob_no, name: p.full_name, gender: p.gender ?? "", call_limit: p.call_limit || null, auto_assign: !!p.auto_assign, ...(by.get(p.name) ?? { assigned: 0, pending: 0, positive: 0 }) })),
+    callers: people.map((p) => ({ id: p.name, mob: p.mob_no, name: p.full_name, gender: p.gender ?? "", call_limit: p.call_limit || null, enabled: p.auto_assign !== 0, ...(by.get(p.name) ?? { assigned: 0, pending: 0, positive: 0 }) })),
   });
 });
 
@@ -1254,7 +1331,14 @@ app.patch("/admin/callers/:mob", async (c) => {
     if (n !== null && (!Number.isFinite(n) || n < 1 || n > 1000)) throw bad("Call limit must be between 1 and 1000.");
     patch.call_limit = n;
   }
-  if (typeof b.auto_assign === "boolean") patch.auto_assign = b.auto_assign ? 1 : 0;
+  if (typeof b.enabled === "boolean") {
+    // "Enabled" = can be given calls. A coordinator who still holds calls nobody has made cannot be switched off until those are moved or removed.
+    if (!b.enabled) {
+      const waiting = await erp.count(ASG, [["coordinator", "=", row.name], ["status", "=", PENDING]]);
+      if (waiting > 0) throw bad(`${row.full_name} still has ${waiting} call${waiting === 1 ? "" : "s"} nobody has made. Move them to another coordinator or remove them first.`);
+    }
+    patch.auto_assign = b.enabled ? 1 : 0;
+  }
   await erp.update(PERSON, row.name, patch);
   return c.json({ ok: true });
 });
@@ -1263,18 +1347,19 @@ app.patch("/admin/callers/:mob", async (c) => {
 //
 // Three kinds of hand-out, all built the same way: (1) PLAN: the server works out exactly who gets which contact and returns it,
 // without writing anything; (2) APPLY: the app sends that plan back in small batches. Each batch is safe to repeat, so a dropped
-// connection never leaves a half-done mess; (3) RELEASE (assign only): removes the earlier untouched calls the new plan no longer uses.
-//   assign   every active contact; the earlier hand-out for this event is replaced, called or not (call logs are never touched)
+// connection never leaves a half-done mess. Nothing already assigned is ever removed by a new hand-out; it goes on top.
+//   assign   contacts nobody has been given yet for this event, narrowed by filters, up to `limit` of them
 //   followup contacts whose last call had one of the chosen statuses (optionally within a date range), for another try
 //   move     untouched calls of chosen coordinators (or of everyone when `all`) go to other coordinators
+// A coordinator's call limit is the most they can hold for the event: what they already have counts against it.
 type Kind = "assign" | "followup" | "move";
-type GroupIn = { filters: PoolFilter[]; keep_previous: boolean; leave: boolean; coordinators: { mob: string; min: number; max: number }[] };
+type To = { keep_previous: boolean; coordinators: string[] };
 type AssignBody = {
   kind: Kind; event: string; filters: PoolFilter[]; statuses: string[]; date_from: string; date_to: string; from: string[]; include_new: boolean; all: boolean;
-  groups: GroupIn[]; rest: GroupIn;
+  limit: number; to: To;
 };
 /** The fields a hand-out can be narrowed by. Fixed here so the app can never ask for anything else. */
-const POOL_FIELDS = ["college", "branch", "level", "gender", "occupation", "guide", "reg_event", "attended", "skill", "interest"] as const;
+const POOL_FIELDS = ["college", "branch", "area", "level", "gender", "occupation", "guide", "reg_event", "attended", "skill", "interest"] as const;
 const arr = (v: unknown, max = 5000) => (Array.isArray(v) ? v.map((x) => String(x)).slice(0, max) : []);
 const whole = (v: unknown) => { const n = Math.floor(Number(v)); return Number.isFinite(n) && n > 0 ? Math.min(n, 100000) : 0; };
 const rec = (v: unknown): Record<string, unknown> => (v && typeof v === "object" ? (v as Record<string, unknown>) : {});
@@ -1286,26 +1371,18 @@ function parseFilters(v: unknown): PoolFilter[] {
     return field ? [{ field, mode: f.mode === "except" ? "except" as const : "only" as const, values: arr(f.values, 2000) }] : [];
   });
 }
-function parseGroup(v: unknown): GroupIn {
-  const g = rec(v);
-  return {
-    filters: parseFilters(g.filters), keep_previous: g.keep_previous === true, leave: g.leave === true,
-    coordinators: (Array.isArray(g.coordinators) ? g.coordinators : []).slice(0, 200).map((x) => {
-      const m = rec(x);
-      return { mob: normalizeMobile(m.mob) ?? "", min: whole(m.min), max: whole(m.max) };
-    }).filter((m) => m.mob),
-  };
-}
 function assignBody(b: Record<string, unknown>): AssignBody {
   const kind = (["assign", "followup", "move"] as const).find((x) => x === b.kind);
   if (!kind) throw bad("Choose what you want to do.");
   const date = (v: unknown) => (DATE_RE.test(String(v ?? "")) ? String(v) : "");
+  const to = rec(b.to);
   return {
     kind, event: clean(b.event, 60), filters: parseFilters(b.filters),
     statuses: arr(b.statuses, 20).filter((x) => (STATUSES as readonly string[]).includes(x) && x !== PENDING),
     date_from: date(b.date_from), date_to: date(b.date_to),
     from: arr(b.from, 200).map((m) => normalizeMobile(m) ?? "").filter(Boolean), include_new: b.include_new === true, all: b.all === true,
-    groups: (Array.isArray(b.groups) ? b.groups : []).slice(0, 30).map(parseGroup), rest: parseGroup(b.rest),
+    limit: whole(b.limit),
+    to: { keep_previous: to.keep_previous === true, coordinators: arr(to.coordinators, 200).map((m) => normalizeMobile(m) ?? "").filter(Boolean) },
   };
 }
 
@@ -1328,19 +1405,19 @@ const COORD_FIELDS = ["name", "mob_no", "full_name", "gender", "call_limit", "au
 const canReceiveCalls = (p: { gender?: string }) => p.gender !== "F";
 
 type PoolItem = { person: string; row?: Asg; attrs: Attrs };
-type PoolData = { items: PoolItem[]; coords: Coordinator[]; existing: Asg[] };
+type PoolData = { items: PoolItem[]; coords: Coordinator[]; existing: Asg[]; assigned: number };
 
 /** The contacts a hand-out can draw from (before the admin's filters), with the values the filters look at. */
 async function loadPool(c: Ctx, a: AssignBody, extraField = ""): Promise<PoolData> {
   if (!a.event) throw bad("Choose the event these calls are for.");
   if (a.date_from && a.date_to && a.date_from > a.date_to) throw bad("The 'from' date is after the 'to' date.");
   const erp = erpOf(c);
-  const needs = (list: "skill" | "interest") => extraField === list || [a.filters, ...a.groups.map((g) => g.filters)].some((fs) => fs.some((f) => f.field === list));
+  const needs = (list: "skill" | "interest") => extraField === list || a.filters.some((f) => f.field === list);
   const multi = (list: "skill" | "interest") => needs(list)
     ? erp.list<{ parent: string; id: string }>(MULTI[list].child, ["parent", `${MULTI[list].link} as id`], [["parenttype", "=", PERSON]], { parent: PERSON })
     : Promise.resolve([] as { parent: string; id: string }[]);
   const [people, existing, coords, skills, interests] = await Promise.all([
-    erp.list<Row>(PERSON, ["name", "college", "branch", "level", "gender", "occupation", "guide", "event_code", "attendance_count"], [["user_tag", "=", "Public"], ["is_active", "=", 1]], { order_by: "creation asc" }), // staff and "Not Interested" contacts are never called
+    erp.list<Row>(PERSON, ["name", "college", "branch", "area", "level", "gender", "occupation", "guide", "event_code", "attendance_count"], [["user_tag", "=", "Public"], ["is_active", "=", 1]], { order_by: "creation asc" }), // staff and "Not Interested" contacts are never called
     erp.list<Asg>(ASG, ASG_FIELDS, [["event_code", "=", a.event]]),
     erp.list<Coordinator>(PERSON, COORD_FIELDS, [["user_tag", "=", "Coordinator"], ["is_active", "=", 1]]),
     multi("skill"), multi("interest"),
@@ -1350,22 +1427,24 @@ async function loadPool(c: Ctx, a: AssignBody, extraField = ""): Promise<PoolDat
   const have = new Map(existing.map((e) => [e.person, e]));
   const fromIds = new Set(a.all ? [] : coords.filter((p) => a.from.includes(p.mob_no)).map((p) => p.name));
   const attrsOf = (p: Row): Attrs => ({
-    college: [p.college ?? ""], branch: [p.branch ?? ""], level: [p.level ?? ""], gender: [p.gender ?? ""], occupation: [p.occupation ?? ""],
+    college: [p.college ?? ""], branch: [p.branch ?? ""], area: [p.area ?? ""], level: [p.level ?? ""], gender: [p.gender ?? ""], occupation: [p.occupation ?? ""],
     guide: [p.guide ?? ""], reg_event: [p.event_code ?? ""], attended: [(p.attendance_count ?? 0) > 0 ? "yes" : "no"],
     skill: sk.get(p.name) ?? [], interest: it.get(p.name) ?? [],
   });
   const items: PoolItem[] = [];
+  let assigned = 0; // contacts that already have an assignment for this event
   for (const p of people) {
     const row = have.get(p.name);
+    if (row) assigned++;
     let ok: boolean;
-    if (a.kind === "assign") ok = true; // everyone: an earlier hand-out is replaced, whether called or not
+    if (a.kind === "assign") ok = !row; // only contacts nobody has been given yet for this event; what is assigned stays
     else if (a.kind === "followup") {
       const day = (row?.submitted_at ?? "").slice(0, 10);
       ok = !!row && a.statuses.includes(row.status) && (!(a.date_from || a.date_to) || !!day) && (!a.date_from || day >= a.date_from) && (!a.date_to || day <= a.date_to);
     } else ok = row ? row.status === PENDING && (a.all || fromIds.has(row.coordinator)) : a.include_new;
     if (ok) items.push({ person: p.name, row, attrs: attrsOf(p) });
   }
-  return { items, coords, existing };
+  return { items, coords, existing, assigned };
 }
 
 const GENDER_TITLE: Record<string, string> = { M: "Male", F: "Female" };
@@ -1376,27 +1455,31 @@ app.post("/admin/assign/breakdown", async (c) => {
   const a = assignBody(b);
   const field = (POOL_FIELDS as readonly string[]).find((n) => n === b.field);
   const base_ = Array.isArray(b.base_filters) ? parseFilters(b.base_filters) : null; // the filters that decide which values are listed (the caller leaves out the field's own)
-  const { items } = await loadPool(c, a, field ?? "");
+  const { items, assigned } = await loadPool(c, a, field ?? "");
   const total = items.filter((i) => passes(i.attrs, a.filters)).length;
-  if (!field) return c.json({ total });
+  if (!field) return c.json({ total, remaining: items.length, assigned });
   const base = items.filter((i) => passes(i.attrs, base_ ?? a.filters.filter((f) => f.field !== field)));
   const count = new Map<string, number>();
   for (const i of base) for (const v of new Set(i.attrs[field]?.length ? i.attrs[field] : [""])) count.set(v, (count.get(v) ?? 0) + 1);
   const o = await loadOptions(c);
   const titles = new Map<string, string>();
-  if (field === "college" || field === "branch" || field === "skill" || field === "interest") for (const x of o[field]) titles.set(x.id, x.title);
+  if (field === "college" || field === "branch" || field === "area" || field === "skill" || field === "interest") for (const x of o[field]) titles.set(x.id, x.title);
   else if (field === "guide") for (const x of o.guide) titles.set(x.id, x.title);
   else if (field === "reg_event") for (const e of await loadEvents(c)) titles.set(e.code, e.name);
   else if (field === "gender") for (const k of Object.keys(GENDER_TITLE)) titles.set(k, GENDER_TITLE[k]!);
   else if (field === "attended") { titles.set("yes", "Has attended"); titles.set("no", "Never attended"); }
   const values = [...count].filter(([id]) => id !== "").map(([id, n]) => ({ id, title: titles.get(id) ?? id, count: n })).sort((x, y) => y.count - x.count || x.title.localeCompare(y.title));
-  return c.json({ field, total, base: base.length, empty: count.get("") ?? 0, values });
+  return c.json({ field, total, remaining: items.length, assigned, base: base.length, empty: count.get("") ?? 0, values });
 });
+
+/** Calls are given only to coordinators the admin has not switched off. */
+const receives = (p: Coordinator) => canReceiveCalls(p) && p.auto_assign !== 0;
 
 /** Works out who gets which contact. Writes nothing. */
 async function planAssign(c: Ctx, a: AssignBody) {
   if (a.kind === "followup" && !a.statuses.length) throw bad("Choose at least one call status.");
   if (a.kind === "move" && !a.all && !a.from.length) throw bad("Choose whose calls to move.");
+  if (!a.to.coordinators.length) throw bad("Choose at least one coordinator.");
   const erp = erpOf(c);
   const { items: all, coords, existing } = await loadPool(c, a);
   const byMob = new Map(coords.map((p) => [p.mob_no, p]));
@@ -1404,10 +1487,9 @@ async function planAssign(c: Ctx, a: AssignBody) {
   const fromIds = new Set(a.all ? [] : coords.filter((p) => a.from.includes(p.mob_no)).map((p) => p.name));
   const pool = all.filter((i) => passes(i.attrs, a.filters));
 
-  // Who had them before (only needed when a group says "same coordinator as before").
+  // Who had them before (only needed when "same coordinator as before" is on).
   const before = new Map<string, string>();
-  const wantsBefore = [...a.groups, a.rest].some((g) => g.keep_previous);
-  if (wantsBefore) {
+  if (a.to.keep_previous) {
     for (const i of pool) { if (i.row) before.set(i.person, i.row.coordinator); } // this event's current call first, then earlier events and calls
     if (a.kind !== "followup") {
       const [earlier, logs] = await Promise.all([
@@ -1419,94 +1501,42 @@ async function planAssign(c: Ctx, a: AssignBody) {
     }
   }
 
-  const given = new Map<string, number>(); // coordinator -> contacts given so far in this plan, across all groups
-  const mins = new Map<string, number>();
+  // What each coordinator already holds for this event counts against their call limit (blank limit = no limit).
+  const has = new Map<string, number>();
+  for (const e of existing) has.set(e.coordinator, (has.get(e.coordinator) ?? 0) + 1);
+  const members: Member[] = [];
+  const info = new Map<string, { limit: number | null; has: number }>();
+  for (const mob of new Set(a.to.coordinators)) {
+    const p = byMob.get(mob);
+    if (!p || !receives(p) || fromIds.has(p.name)) continue; // women, switched-off, unknown people and the coordinators being emptied never receive
+    const held = has.get(p.name) ?? 0;
+    const limit = p.call_limit || null;
+    info.set(p.name, { limit, has: held });
+    members.push({ id: p.name, name: p.full_name, min: 0, max: limit ? Math.max(0, limit - held) : Infinity });
+  }
+  if (!members.length) throw bad("None of the chosen coordinators can receive calls (women and switched-off coordinators are skipped).");
+
+  const wanted = a.limit ? Math.min(a.limit, pool.length) : pool.length; // "how many contacts": the rest stay unassigned
+  const chosen = shuffle(pool).slice(0, wanted);
+  const given = new Map<string, number>();
+  const r = shareOut(chosen, members, given, a.to.keep_previous ? (i) => before.get(i.person) : undefined);
   const moves = new Map<string, string[]>();
   const taken = new Map<string, number>();
-  let remaining = shuffle(pool);
-  const summary: { name: string; matched: number; given: number; left: number }[] = [];
-  const leftOver: PoolItem[] = [];
-  let leftByChoice = 0, kept = 0;
-
-  const run = (g: GroupIn, label: string, matched: PoolItem[]) => {
-    if (!matched.length) { summary.push({ name: label, matched: 0, given: 0, left: 0 }); return; }
-    if (g.leave) { leftByChoice += matched.length; summary.push({ name: label, matched: matched.length, given: 0, left: matched.length }); return; }
-    const members: Member[] = [];
-    for (const m of g.coordinators) {
-      const p = byMob.get(m.mob);
-      if (!p || !canReceiveCalls(p) || fromIds.has(p.name)) continue; // women, unknown people and the coordinators being emptied never receive
-      const max = m.max || Infinity;
-      members.push({ id: p.name, name: p.full_name, min: m.min, max });
-      mins.set(p.name, Math.max(mins.get(p.name) ?? 0, m.min));
-    }
-    if (!members.length) throw bad(`${label} has no coordinator to give the calls to. Women are never assigned calls.`);
-    const r = shareOut(matched, members, given, g.keep_previous ? (i) => before.get(i.person) : undefined);
-    for (const x of r.given) {
-      moves.set(x.coordinator, [...(moves.get(x.coordinator) ?? []), x.item.person]);
-      if (x.item.row) taken.set(x.item.row.coordinator, (taken.get(x.item.row.coordinator) ?? 0) + 1);
-    }
-    kept += r.kept;
-    leftOver.push(...r.left);
-    summary.push({ name: label, matched: matched.length, given: r.given.length, left: r.left.length });
-  };
-  a.groups.forEach((g, n) => {
-    const hit = remaining.filter((i) => passes(i.attrs, g.filters));
-    const gone = new Set(hit);
-    remaining = remaining.filter((i) => !gone.has(i)); // a contact that fits two groups goes to the first
-    run(g, `Group ${n + 1}`, hit);
-  });
-  run(a.rest, a.groups.length ? "Everyone else" : "All matching contacts", remaining);
-
-  const givenPeople = new Set([...moves.values()].flat());
-  // An earlier hand-out is replaced: its untouched calls that this plan does not use are removed afterwards (assign only).
-  const release = a.kind === "assign" ? existing.filter((e) => !givenPeople.has(e.person)).map((e) => e.name) : [];
-  const total = [...given.values()].reduce((s, n) => s + n, 0);
+  for (const x of r.given) {
+    moves.set(x.coordinator, [...(moves.get(x.coordinator) ?? []), x.item.person]);
+    if (x.item.row) taken.set(x.item.row.coordinator, (taken.get(x.item.row.coordinator) ?? 0) + 1);
+  }
   return {
-    kind: a.kind, event: a.event, follow_up: a.kind === "followup", allow: a.kind === "followup" ? a.statuses : a.kind === "assign" ? [...STATUSES] : [PENDING],
-    candidates: pool.length, assignable: total, leftover: leftOver.length, left_by_choice: leftByChoice, kept_with_previous: kept,
-    groups: summary,
-    per_coordinator: [...given].map(([id, n]) => {
-      const m = [...a.groups, a.rest].flatMap((g) => g.coordinators).find((x) => byMob.get(x.mob)?.name === id);
-      return { id, name: nameOf.get(id) ?? id, add: n, min: mins.get(id) ?? 0, max: m?.max || null, short: n < (mins.get(id) ?? 0) };
-    }).sort((x, y) => y.add - x.add),
+    kind: a.kind, event: a.event, follow_up: a.kind === "followup", allow: a.kind === "followup" ? a.statuses : a.kind === "assign" ? [] : [PENDING],
+    candidates: pool.length, wanted, assignable: r.given.length, leftover: r.left.length, kept_with_previous: r.kept,
+    per_coordinator: members.map((m) => ({ id: m.id, name: m.name, add: given.get(m.id) ?? 0, has: info.get(m.id)!.has, limit: info.get(m.id)!.limit, full: m.max === 0 }))
+      .sort((x, y) => y.add - x.add),
     taken_from: [...taken].map(([id, n]) => ({ name: nameOf.get(id) ?? "Earlier system (imported)", count: n })).sort((x, y) => y.count - x.count),
-    release, replaced: release.length,
     moves: [...moves].map(([coordinator, persons]) => ({ coordinator, persons })),
   };
 }
 
 app.post("/admin/assign/plan", async (c) => { needAdmin(c); return c.json(await planAssign(c, assignBody(await body(c)))); });
-
-/** How many contacts each group holds, which groups share contacts, and how many fit none. Numbers only; writes nothing. */
-app.post("/admin/assign/group-sizes", async (c) => {
-  needAdmin(c);
-  const a = assignBody(await body(c));
-  const { items } = await loadPool(c, a);
-  const pool = items.filter((i) => passes(i.attrs, a.filters));
-  const hit = a.groups.map((g) => pool.map((i) => g.filters.length > 0 && passes(i.attrs, g.filters)));
-  const sizes = hit.map((h) => h.filter(Boolean).length);
-  const overlaps: { a: number; b: number; count: number }[] = [];
-  for (let x = 0; x < hit.length; x++) for (let y = x + 1; y < hit.length; y++) {
-    const count = pool.filter((_, k) => hit[x]![k] && hit[y]![k]).length;
-    if (count) overlaps.push({ a: x, b: y, count });
-  }
-  const rest = pool.filter((_, k) => !hit.some((h) => h[k])).length;
-  return c.json({ pool: pool.length, sizes, overlaps, rest });
-});
-
-/** Removes earlier calls (called or not) that a new plan no longer uses. Only the assignment rows go: every call log stays. */
-app.post("/admin/assign/release", async (c) => {
-  needAdmin(c);
-  const b = await body(c);
-  const event = clean(b.event, 60);
-  const names = arr(b.names, 100);
-  if (!event) throw bad("Choose an event.");
-  if (!names.length) return c.json({ removed: 0 });
-  const erp = erpOf(c);
-  const rows = await erp.list<{ name: string }>(ASG, ["name"], [["name", "in", names], ["event_code", "=", event]]);
-  if (rows.length) await erp.call("POST", "/api/method/frappe.desk.reportview.delete_items", { items: JSON.stringify(rows.map((r) => r.name)), doctype: ASG });
-  return c.json({ removed: rows.length });
-});
 
 /**
  * Writes one batch of a plan (at most 100 contacts). Safe to repeat: contacts that already have a call row are updated, the rest
@@ -1528,7 +1558,7 @@ app.post("/admin/assign/apply", async (c) => {
   const erp = erpOf(c);
   const ids = [...new Set(pairs.map((p) => p.person))];
   const [coords, people, rows] = await Promise.all([
-    erp.list<{ name: string; gender?: string }>(PERSON, ["name", "gender"], [["name", "in", [...new Set(pairs.map((p) => p.coordinator))]], ["user_tag", "=", "Coordinator"], ["is_active", "=", 1]]),
+    erp.list<{ name: string; gender?: string }>(PERSON, ["name", "gender"], [["name", "in", [...new Set(pairs.map((p) => p.coordinator))]], ["user_tag", "=", "Coordinator"], ["is_active", "=", 1], ["auto_assign", "=", 1]]),
     erp.list<{ name: string }>(PERSON, ["name"], [["name", "in", ids], ["user_tag", "=", "Public"], ["is_active", "=", 1]]),
     erp.list<Asg>(ASG, ASG_FIELDS, [["event_code", "=", event], ["person", "in", ids]], { limit_page_length: 0 }),
   ]);
@@ -1590,16 +1620,23 @@ app.post("/admin/assign/unassign", async (c) => {
   needAdmin(c);
   const b = await body(c);
   const event = clean(b.event, 60);
-  if (!event) throw bad("Choose an event.");
-  const erp = erpOf(c);
-  const f: Filters = [["event_code", "=", event], ["status", "=", PENDING]];
   const mob = normalizeMobile(b.coordinator);
+  if (!event && !mob) throw bad("Choose an event.");
+  const erp = erpOf(c);
+  // Normally only untouched calls go (a coordinator without an event: all their untouched calls, in every event). With `all` and an
+  // event, every assignment of that event goes, called ones too; the call logs (history) are never touched.
+  const f: Filters = b.all === true && event ? [] : [["status", "=", PENDING]];
+  if (event) f.push(["event_code", "=", event]);
   if (mob) { const r = await getRow(erp, mob); if (!r) throw new HttpError(404, "Coordinator not found."); f.push(["coordinator", "=", r.name]); }
-  const rows = await erp.list<{ name: string }>(ASG, ["name"], f, { limit_page_length: 5000 });
-  for (const part of chunk(rows.map((r) => r.name), 100)) {
-    await erp.call("POST", "/api/method/frappe.desk.reportview.delete_items", { items: JSON.stringify(part), doctype: ASG });
+  // ERPNext deletes more than 10 records in the background, which leaves counts stale for a while. Deleting 10 at a time finishes
+  // before this answers, so what the app shows next is right. One call removes at most 300; `more` tells the app to call again.
+  const BATCH = 300;
+  const rows = await erp.list<{ name: string }>(ASG, ["name"], f, { limit_page_length: BATCH });
+  const parts = chunk(rows.map((r) => r.name), 10);
+  for (const group of chunk(parts, 5)) {
+    await Promise.all(group.map((part) => erp.call("POST", "/api/method/frappe.desk.reportview.delete_items", { items: JSON.stringify(part), doctype: ASG })));
   }
-  return c.json({ removed: rows.length });
+  return c.json({ removed: rows.length, more: rows.length === BATCH });
 });
 
 app.get("/admin/calls/stats", async (c) => {
@@ -1761,6 +1798,7 @@ app.get("/f/:slug", async (c) => {
     open: !!link.is_open, intro: link.intro ?? "", asks: { dinner: !!link.ask_dinner, transport: !!link.ask_transport, donation: !!link.ask_donation },
     slots: lines(link.slot_options), services: lines(link.service_options), genders: GENDER_LABELS, occupations: [...OCCUPATIONS],
     colleges: (await loadOptions(c)).college.filter((o) => sameKey(o.title) !== sameKey(OTHERS)).map((o) => ({ value: o.id, label: o.title })),
+    areas: (await loadOptions(c)).area.filter((o) => sameKey(o.title) !== sameKey(OTHERS)).map((o) => ({ value: o.id, label: o.title })),
   };
   return c.html(renderPage(cfg, nonce), 200, pageHeaders(nonce));
 });
@@ -1775,7 +1813,7 @@ app.post("/pub/:slug/lookup", async (c) => {
   if (!mob) throw bad("Please enter a valid 10-digit mobile number.");
   const erp = erpOf(c);
   const [p] = await erp.list<{ name: string; full_name: string; gender?: string; occupation?: string; profession?: string; venue?: string }>(
-    PERSON, ["name", "full_name", "gender", "occupation", "college.title as profession", "venue"], [["mob_no", "=", mob]], { limit_page_length: 1 });
+    PERSON, ["name", "full_name", "gender", "occupation", "college.title as profession", "area.title as venue"], [["mob_no", "=", mob]], { limit_page_length: 1 });
   if (!p) return c.json({ found: false });
   const reg = await erp.get(link.link_type === "Feedback" ? FB : REG, `${link.event_code}-${p.name}`);
   return c.json({ found: true, registered: !!reg, person: { name: p.full_name, gender: p.gender ?? "", occupation: p.occupation ?? "", profession: p.profession ?? "", venue: p.venue ?? "" } });
@@ -1821,7 +1859,7 @@ app.post("/pub/:slug/submit", async (c) => {
     if (!name) throw bad("Please enter your name.");
     if (!gender) throw bad("Please choose your gender.");
     const doc = {
-      mob_no: mob, full_name: name, gender, occupation: pick(b.occupation, OCCUPATIONS), college: (await publicCollege(c, b)) || undefined, venue: clean(b.venue, 200),
+      mob_no: mob, full_name: name, gender, occupation: pick(b.occupation, OCCUPATIONS), college: (await publicCollege(c, b)) || undefined, area: (await publicArea(c, b)) || undefined,
       event_code: link.event_code, user_tag: "Public", is_active: 1, registered_on: istToday(), registered_by: `Link: ${link.title}`.slice(0, 140),
     };
     try {
@@ -2081,7 +2119,7 @@ app.get("/admin/export/calls", async (c) => {
 
 // ---------- admin: import contacts from a Google Form's response sheet (or a CSV file)
 const IMPORT_BATCH = 100; // rows saved per request: keeps every request small and fast
-const IMPORT_PERSON_FIELDS = ["name", "mob_no", "full_name", "gender", "level", "occupation", "college.title as profession", "pg.title as pg_name", "venue", "guide.title as guide", "event_code", "user_tag"];
+const IMPORT_PERSON_FIELDS = ["name", "mob_no", "full_name", "gender", "level", "occupation", "college.title as profession", "pg.title as pg_name", "area.title as venue", "guide.title as guide", "event_code", "user_tag"];
 const ROW_TO_DOC: Record<string, keyof ImportRow> = {
   full_name: "name", gender: "gender", level: "level", occupation: "occupation", profession: "profession", pg_name: "pg_name", venue: "venue",
   guide: "guide", event_code: "event_code",
@@ -2192,13 +2230,15 @@ app.post("/admin/import/commit", async (c) => {
   for (const t of new Set(batch.map((r) => r.profession).filter(Boolean))) collegeOf.set(t, await optionId(c, "college", t));
   const pgOf = new Map<string, string>();
   for (const t of new Set(batch.map((r) => r.pg_name).filter(Boolean))) pgOf.set(t, await optionId(c, "pg", t));
+  const areaOf = new Map<string, string>();
+  for (const t of new Set(batch.map((r) => r.venue).filter(Boolean))) areaOf.set(t, await optionId(c, "area", t));
   const guideId = new Map((await loadOptions(c)).guide.map((g) => [g.title, g.id]));
   const toDoc = (field: string, v: string): [string, unknown] =>
-    field === "profession" ? ["college", collegeOf.get(v) || null] : field === "pg_name" ? ["pg", pgOf.get(v) || null] : field === "guide" ? ["guide", guideId.get(v) || null] : [field, v];
+    field === "profession" ? ["college", collegeOf.get(v) || null] : field === "pg_name" ? ["pg", pgOf.get(v) || null] : field === "venue" ? ["area", areaOf.get(v) || null] : field === "guide" ? ["guide", guideId.get(v) || null] : [field, v];
   const fresh = batch.filter((r) => !old.has(r.mob));
   const docs = fresh.map((r) => ({
     doctype: PERSON, mob_no: r.mob, full_name: r.name, gender: r.gender, level: r.level, occupation: r.occupation, college: collegeOf.get(r.profession) || undefined, pg: pgOf.get(r.pg_name) || undefined,
-    venue: r.venue, ...(guideId.get(r.guide) && { guide: guideId.get(r.guide) }), ...(r.event_code && { event_code: r.event_code }),
+    ...(areaOf.get(r.venue) && { area: areaOf.get(r.venue) }), ...(guideId.get(r.guide) && { guide: guideId.get(r.guide) }), ...(r.event_code && { event_code: r.event_code }),
     user_tag: "Public", is_active: 1, registered_by: `Import (${s.name})`, registered_on: istToday(),
   }));
   if (docs.length) {

@@ -194,13 +194,13 @@ class _PagedListScreenState extends State<PagedListScreen> {
               }
               if (_loading) {
                 return const Padding(
-                  padding: EdgeInsets.all(24),
+                  padding: EdgeInsets.all(16),
                   child: Center(child: CircularProgressIndicator()),
                 );
               }
               if (_rows.isEmpty) {
                 return Padding(
-                  padding: const EdgeInsets.all(24),
+                  padding: const EdgeInsets.all(16),
                   child: Center(child: Text(widget.emptyText, style: text.bodyMedium)),
                 );
               }

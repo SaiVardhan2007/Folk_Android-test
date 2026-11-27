@@ -26,14 +26,14 @@ extension WindowClassContext on BuildContext {
 }
 
 /// Spacing scale (dp). Use these instead of literal numbers.
-const double kGapXS = 4;
-const double kGapS = 8;
-const double kGapM = 12;
-const double kGapL = 16;
-const double kGapXL = 24;
+const double kGapXS = 3;
+const double kGapS = 6;
+const double kGapM = 10;
+const double kGapL = 12;
+const double kGapXL = 18;
 
 /// Side padding used on every screen (small, so content covers most of the page).
-const double kPagePadding = 16;
+const double kPagePadding = 12;
 
 /// Lays children out in equal-width columns, choosing the column count from the available width.
 /// Phones get [compact] columns, small tablets [medium], big screens [expanded].

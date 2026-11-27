@@ -52,11 +52,19 @@ class AdminRepo {
   /// Counts only, never names. Without `field` it returns just the number of matching contacts.
   Future<Map<String, dynamic>> assignBreakdown(Map<String, dynamic> body) =>
       _api.post('/admin/assign/breakdown', body: body, timeout: const Duration(seconds: 60));
-  Future<Map<String, dynamic>> assignGroupSizes(Map<String, dynamic> body) =>
-      _api.post('/admin/assign/group-sizes', body: body, timeout: const Duration(seconds: 60));
-  Future<int> releaseAssign(String event, List<String> names) async =>
-      ((await _api.post('/admin/assign/release', body: {'event': event, 'names': names}, timeout: const Duration(seconds: 90)))['removed'] as num)
-          .toInt();
+
+  /// Removes calls nobody has made yet (calls already made stay). Give an event, a coordinator, or both.
+  /// With [all] (and an event) every assignment of the event goes, called ones too. Call logs (history) always stay.
+  Future<int> unassign({String? event, String? coordinatorMob, bool all = false}) async {
+    var removed = 0;
+    // The server removes at most 300 per call, so repeat until nothing is left.
+    for (var more = true; more;) {
+      final r = await _api.post('/admin/assign/unassign', body: {'event': ?event, 'coordinator': ?coordinatorMob, if (all) 'all': true}, timeout: const Duration(seconds: 120));
+      removed += (r['removed'] as num).toInt();
+      more = r['more'] == true;
+    }
+    return removed;
+  }
   Future<void> finishAssign(Map<String, dynamic> body) => _api.post('/admin/assign/finish', body: body);
   Future<Map<String, dynamic>> eventSummary(String code) => _api.get('/admin/events/${Uri.encodeComponent(code)}/summary');
   Future<Map<String, dynamic>> callStats(String event) => _api.get('/admin/calls/stats', query: {'event': event});

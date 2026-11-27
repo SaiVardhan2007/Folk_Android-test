@@ -1,8 +1,8 @@
-// Dropdown lists stored by ID: College / Company, Branch, Skill, Interest, PG / Residence.
+// Dropdown lists stored by ID: College / Company, Branch, Skill, Interest, PG / Residence, Area of stay.
 // Each value is a record in its own ERPNext DocType with a random ID that never changes and an editable Title.
 // People store only the ID, so editing a Title in ERPNext changes it for everyone at once.
 
-export const LISTS = { college: "FOLK College", branch: "FOLK Branch", skill: "FOLK Skill", interest: "FOLK Interest", pg: "FOLK PG" } as const;
+export const LISTS = { college: "FOLK College", branch: "FOLK Branch", skill: "FOLK Skill", interest: "FOLK Interest", pg: "FOLK PG", area: "FOLK Area" } as const;
 export type ListName = keyof typeof LISTS;
 export const LIST_NAMES = Object.keys(LISTS) as ListName[];
 
