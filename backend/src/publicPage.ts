@@ -13,6 +13,8 @@ export type PageConfig = {
   services: string[];
   genders: { value: string; label: string }[];
   occupations: string[];
+  /** College / Company values people can pick (the form adds "Others" at the bottom; it cannot add new values). */
+  colleges: { value: string; label: string }[];
 };
 
 /** JSON that is safe inside a <script type="application/json"> block. */
@@ -57,6 +59,13 @@ button.link{background:none;color:var(--brand);height:48px;margin-top:6px}
 .error{color:var(--danger);font-weight:600;margin-top:12px}
 .done{text-align:center;padding:28px var(--gap)}
 .done .tick{width:72px;height:72px;border-radius:50%;background:var(--success);color:#fff;font-size:42px;line-height:72px;margin:0 auto 14px}
+.thanks{position:relative;overflow:hidden;border:2px solid #D9A441;background:linear-gradient(180deg,#FFF3DA 0%,#FFFFFF 55%,#FFF3DA 100%);padding:32px var(--gap) 26px}
+.thanks h2{font-size:28px;color:var(--brand-dark);margin:8px 0 6px}
+.thanks p{margin:0 0 10px}
+.thanks svg{display:block;margin:0 auto}
+.thanks .om{font-size:30px;color:var(--brand);line-height:1;margin-bottom:2px}
+.thanks .mantra{margin:18px 0 6px;padding:14px 12px;border-radius:14px;background:var(--brand-dark);color:#FFE9B8;font-family:Georgia,"Times New Roman",serif;font-style:italic;font-size:17px;line-height:1.6}
+.thanks .sign{color:var(--muted);font-size:var(--text-small);margin-top:12px}
 .hp{position:absolute;left:-9999px;width:1px;height:1px;overflow:hidden}
 h2{margin:0 0 4px;font-size:21px}
 .sub{color:var(--muted);font-size:var(--text-small);margin:0 0 6px}
@@ -159,7 +168,7 @@ const SCRIPT = `
         field('Full name *', el('input', {id:'name', type:'text', autocomplete:'name', maxlength:'100'})),
         C.type === 'Feedback' ? null : field('Gender *', select('gender', C.genders)),
         C.type === 'Feedback' ? null : field('Occupation', select('occupation', C.occupations)),
-        C.type === 'Feedback' ? null : field('College / Company', el('input', {id:'profession', type:'text', maxlength:'120'})),
+        C.type === 'Feedback' ? null : field('College / Company', select('college_id', (C.colleges || []).concat([{value:'other', label:'Others'}]))),
         C.type === 'Feedback' ? null : field('Area you stay in', el('input', {id:'venue', type:'text', maxlength:'120'}))
       ]));
     }
@@ -195,7 +204,7 @@ const SCRIPT = `
       e.preventDefault(); err.textContent = '';
       var body = { mob: state.mob, website: val('website'), waited: Date.now() - state.started };
       if (!state.found) {
-        body.name = val('name'); body.gender = val('gender'); body.occupation = val('occupation'); body.profession = val('profession'); body.venue = val('venue');
+        body.name = val('name'); body.gender = val('gender'); body.occupation = val('occupation'); body.college_id = val('college_id'); body.venue = val('venue');
         if (!body.name) { err.textContent = 'Please enter your name.'; return; }
         if (C.type !== 'Feedback' && !body.gender) { err.textContent = 'Please choose your gender.'; return; }
       }
@@ -214,13 +223,37 @@ const SCRIPT = `
     window.scrollTo(0, 0);
   }
 
+  // A peacock feather (Krishna's crest), drawn in the page so it needs no image file.
+  function feather(){
+    var NS = 'http://www.w3.org/2000/svg';
+    function n(tag, attrs){ var e = document.createElementNS(NS, tag); for (var k in attrs) e.setAttribute(k, attrs[k]); return e; }
+    var svg = n('svg', {viewBox:'0 0 120 170', width:'96', height:'136', 'aria-hidden':'true'});
+    var defs = n('defs', {}), g = n('radialGradient', {id:'eye', cx:'50%', cy:'50%', r:'50%'});
+    [['0','#0B2A5B'],['0.35','#1D4FA3'],['0.6','#12A0A8'],['0.8','#1E8A5E'],['1','#D9A441']].forEach(function(s){ g.appendChild(n('stop', {offset:s[0], 'stop-color':s[1]})); });
+    defs.appendChild(g); svg.appendChild(defs);
+    for (var a = -70; a <= 70; a += 7) {
+      var r = a * Math.PI / 180, x = 60 + Math.sin(r) * 54, y = 62 - Math.cos(r) * 58;
+      svg.appendChild(n('line', {x1:'60', y1:'70', x2:String(x), y2:String(y), stroke:(a % 14 === 0 ? '#1E8A5E' : '#D9A441'), 'stroke-width':'1.4', 'stroke-linecap':'round', opacity:'0.85'}));
+    }
+    svg.appendChild(n('path', {d:'M60 165 C57 130 63 100 60 66', stroke:'#8A5A1F', 'stroke-width':'3', fill:'none', 'stroke-linecap':'round'}));
+    svg.appendChild(n('ellipse', {cx:'60', cy:'62', rx:'26', ry:'34', fill:'url(#eye)', stroke:'#D9A441', 'stroke-width':'2'}));
+    svg.appendChild(n('ellipse', {cx:'60', cy:'62', rx:'9', ry:'13', fill:'#0B2A5B'}));
+    return svg;
+  }
+
   function stepDone(name){
     clear();
     var first = (name || '').split(' ')[0];
-    app.appendChild(el('div', {class:'card done'}, [
-      el('div', {class:'tick', text:'\\u2713'}),
+    var msg = C.type === 'Feedback' ? 'Thank you for your feedback on ' + C.eventName + '. It helps us serve better.'
+      : C.type === 'Volunteer' ? 'Thank you for offering to serve at ' + C.eventName + '. Your service pleases Krishna. We will contact you soon.'
+      : 'Thank you for registering for ' + C.eventName + '. You are most welcome. We look forward to seeing you.';
+    app.appendChild(el('div', {class:'card done thanks'}, [
+      feather(),
+      el('div', {class:'om', text:'\u0950'}),
       el('h2', {text:'Hare Krishna' + (first ? ', ' + first : '') + '!'}),
-      el('p', {text: C.type === 'Feedback' ? 'Thank you for your feedback on ' + C.eventName + '. It helps us serve better.' : C.type === 'Volunteer' ? 'Thank you for offering to serve at ' + C.eventName + '. We will contact you soon.' : 'You are registered for ' + C.eventName + '. We look forward to seeing you.'})
+      el('p', {text: msg}),
+      el('div', {class:'mantra', text:'Hare Krishna Hare Krishna Krishna Krishna Hare Hare \u00b7 Hare Rama Hare Rama Rama Rama Hare Hare'}),
+      el('p', {class:'sign', text:'Your well-wishers at FOLK'})
     ]));
     window.scrollTo(0, 0);
   }

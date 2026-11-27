@@ -11,6 +11,7 @@ import '../printing/printer_sheet.dart';
 import '../printing/receipt_format.dart';
 import '../printing/receipt_renderer.dart';
 import 'admin_repo.dart';
+import 'download_data_screen.dart';
 import 'logs_screen.dart';
 import 'templates_editor.dart';
 
@@ -39,18 +40,21 @@ class SettingsTab extends ConsumerWidget {
       children: [
         Text('App settings', style: text.titleLarge),
         const SizedBox(height: 4),
-        Text(
-          'These switches apply to everyone using the app. Other phones pick up a change the next time they open the app.',
-          style: text.bodyMedium,
-        ),
         const SizedBox(height: 12),
         Card(
           child: ListTile(
             leading: const Icon(Icons.history),
             title: const Text('Activity log'),
-            subtitle: const Text('Everything every user, coordinator and admin has done'),
             trailing: const Icon(Icons.chevron_right),
             onTap: () => Navigator.of(context, rootNavigator: true).push(MaterialPageRoute<void>(builder: (_) => const LogsScreen())),
+          ),
+        ),
+        Card(
+          child: ListTile(
+            leading: const Icon(Icons.download_outlined),
+            title: const Text('Download data'),
+            trailing: const Icon(Icons.chevron_right),
+            onTap: () => Navigator.of(context, rootNavigator: true).push(MaterialPageRoute<void>(builder: (_) => const DownloadDataScreen())),
           ),
         ),
         const SizedBox(height: 12),
@@ -68,30 +72,24 @@ class SettingsTab extends ConsumerWidget {
                   value: v['offline_queue_enabled'] == true,
                   onChanged: (x) => _set(context, ref, 'offline_queue_enabled', x),
                   title: const Text('Offline check-in queue'),
-                  subtitle: const Text('When there is no signal, save check-ins on the phone and send them automatically later.'),
                 ),
                 const Divider(height: 1),
                 SwitchListTile(
                   value: v['auto_approve_signups'] == true,
                   onChanged: (x) => _set(context, ref, 'auto_approve_signups', x),
                   title: const Text('Approve new sign-ups automatically'),
-                  subtitle: const Text('Off: a new coordinator can sign in only after an admin enables the account (People → Awaiting approval).'),
                 ),
                 const Divider(height: 1),
                 SwitchListTile(
                   value: v['whatsapp_enabled'] == true,
                   onChanged: (x) => _set(context, ref, 'whatsapp_enabled', x),
                   title: const Text('WhatsApp message on new registration'),
-                  subtitle: const Text('Sends the welcome message to the new contact and their FOLK Guide when someone is registered.'),
                 ),
                 const Divider(height: 1),
                 SwitchListTile(
                   value: v['notify_coordinator_attendance'] == true,
                   onChanged: (x) => _set(context, ref, 'notify_coordinator_attendance', x),
                   title: const Text('WhatsApp the coordinator when their contact attends'),
-                  subtitle: const Text(
-                    'The coordinator assigned to call a contact gets the contact\'s name, phone number and check-in time at once.',
-                  ),
                 ),
               ],
             ),
@@ -100,10 +98,6 @@ class SettingsTab extends ConsumerWidget {
         const SizedBox(height: 16),
         Text('WhatsApp message formats', style: text.titleLarge),
         const SizedBox(height: 4),
-        Text(
-          'Two kinds of message: automatic messages the server sends (welcome and coordinator alert), and the text a coordinator sends with the Send Message button.',
-          style: text.bodyMedium,
-        ),
         const SizedBox(height: 12),
         Card(
           child: Padding(
@@ -113,17 +107,11 @@ class SettingsTab extends ConsumerWidget {
               children: [
                 Text('Automatic messages', style: text.titleMedium),
                 const SizedBox(height: 4),
-                Text(
-                  'WhatsApp only delivers automatic messages from templates approved in your WhatsApp Business account, so the wording itself is edited there. '
-                  'Type each template\'s name exactly as it is in that account to choose which one is sent.',
-                  style: text.bodyMedium,
-                ),
                 const SizedBox(height: 12),
                 if (s.hasValue) ...[
                   _TemplateName(
                     key: ValueKey('welcome_${s.value!['welcome_template']}'),
                     label: 'Welcome message template',
-                    hint: 'Sent to a new contact. Fields in order: name, event, venue, map link, call number',
                     setting: 'welcome_template',
                     value: '${s.value!['welcome_template'] ?? ''}',
                     onSave: (k, v) => _setText(context, ref, k, v),
@@ -132,7 +120,6 @@ class SettingsTab extends ConsumerWidget {
                   _TemplateName(
                     key: ValueKey('attendance_${s.value!['attendance_template']}'),
                     label: 'Coordinator alert template',
-                    hint: 'Sent to the coordinator when their contact attends. Same five fields as the welcome template',
                     setting: 'attendance_template',
                     value: '${s.value!['attendance_template'] ?? ''}',
                     onSave: (k, v) => _setText(context, ref, k, v),
@@ -152,10 +139,6 @@ class SettingsTab extends ConsumerWidget {
               children: [
                 Text('Send Message button', style: text.titleMedium),
                 const SizedBox(height: 4),
-                Text(
-                  'Type the messages coordinators can send from a call card. The selected one is sent after "Hare Krishna <name>". You can use {name} inside it.',
-                  style: text.bodyMedium,
-                ),
                 const SizedBox(height: 12),
                 const TemplatesEditor(),
               ],
@@ -165,11 +148,6 @@ class SettingsTab extends ConsumerWidget {
         const SizedBox(height: 16),
         Text('Receipt format', style: text.titleLarge),
         const SizedBox(height: 4),
-        Text(
-          'What the "Mark & Print Receipt" button prints on the Bluetooth or USB thermal printer. '
-          'Type the receipt exactly as you want it; everyone\'s phone uses it after it next opens the app.',
-          style: text.bodyMedium,
-        ),
         const SizedBox(height: 12),
         if (s.hasValue)
           _ReceiptEditor(
@@ -196,8 +174,8 @@ class SettingsTab extends ConsumerWidget {
 }
 
 class _TemplateName extends StatefulWidget {
-  const _TemplateName({super.key, required this.label, required this.hint, required this.setting, required this.value, required this.onSave});
-  final String label, hint, setting, value;
+  const _TemplateName({super.key, required this.label, required this.setting, required this.value, required this.onSave});
+  final String label, setting, value;
   final void Function(String key, String value) onSave;
 
   @override
@@ -221,7 +199,7 @@ class _TemplateNameState extends State<_TemplateName> {
         child: TextField(
           controller: _c,
           autocorrect: false,
-          decoration: InputDecoration(labelText: widget.label, helperText: widget.hint, helperMaxLines: 2),
+          decoration: InputDecoration(labelText: widget.label),
         ),
       ),
       const SizedBox(width: 8),
@@ -262,6 +240,8 @@ class _ReceiptEditorState extends ConsumerState<_ReceiptEditor> {
     ts: '2026-11-21 17:45:00',
     count: 3,
     markedBy: 'Volunteer',
+    guide: 'VKGD',
+    guideMobile: '9133318576',
   );
 
   /// Puts `s` where the cursor is (or at the end).
@@ -337,7 +317,6 @@ class _ReceiptEditorState extends ConsumerState<_ReceiptEditor> {
         child: Column(
           crossAxisAlignment: CrossAxisAlignment.stretch,
           children: [
-            Text('Tap a field to add it where the cursor is:', style: text.bodyMedium),
             const SizedBox(height: kGapS),
             Wrap(
               spacing: 8,

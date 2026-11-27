@@ -136,6 +136,8 @@ class PrintStation with WidgetsBindingObserver {
           ts: '${d['ts'] ?? ''}',
           count: (d['count'] as num?)?.toInt() ?? 0,
           markedBy: '${d['marked_by'] ?? ''}',
+          guide: '${d['guide'] ?? ''}',
+          guideMobile: '${d['guide_mobile'] ?? ''}',
         ),
       );
       await _printer.printImage(image);

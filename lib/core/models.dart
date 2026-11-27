@@ -1,5 +1,58 @@
 import '../features/printing/receipt_format.dart';
 
+/// One value of a dropdown list (College / Company, Branch, Skill, Interest). People store the [id]; the [title] can be edited in
+/// ERPNext and then shows everywhere. An empty [id] with a [title] means typed text that is not in the list yet (the server adds it).
+class Opt {
+  const Opt(this.id, this.title);
+  static const none = Opt('', '');
+  final String id, title;
+  bool get isEmpty => id.isEmpty && title.isEmpty;
+  factory Opt.fromJson(Map<String, dynamic> j) => Opt(j['id'] as String? ?? '', j['title'] as String? ?? '');
+  Map<String, dynamic> toJson() => {'id': id, 'title': title};
+  @override
+  bool operator ==(Object other) => other is Opt && other.id == id && other.title == title;
+  @override
+  int get hashCode => Object.hash(id, title);
+}
+
+/// Same rule as the server: two titles are the same value when they differ only in case, spaces or punctuation ("C.B.I.T" = "CBIT").
+String optKey(String s) => s.toLowerCase().replaceAll(RegExp(r'[^\p{L}\p{N}]', unicode: true), '');
+
+List<Opt> _opts(Object? v) => ((v as List?) ?? const []).map((e) => Opt.fromJson(Map<String, dynamic>.from(e as Map))).toList();
+
+/// The dropdown lists stored by ID on the server. [OptionList.name] is the list's name in the API (/options/college).
+enum OptionList { college, branch, skill, interest, pg }
+
+/// A FOLK Guide: name in capitals (e.g. VKGD) and the guide's phone, which belongs to the guide, not to each person.
+/// Guides are added only in ERPNext (the app has no Add button for them).
+class Guide extends Opt {
+  const Guide(super.id, super.title, {this.mobile = '', this.isDefault = false});
+  final String mobile;
+
+  /// Picked for a new person unless someone chooses another guide.
+  final bool isDefault;
+  factory Guide.fromJson(Map<String, dynamic> j) => Guide(
+    j['id'] as String? ?? '',
+    j['title'] as String? ?? '',
+    mobile: j['mobile'] as String? ?? '',
+    isDefault: j['is_default'] as bool? ?? false,
+  );
+}
+
+class OptionLists {
+  const OptionLists([this.lists = const {}, this.guides = const []]);
+  final Map<OptionList, List<Opt>> lists;
+  final List<Guide> guides;
+  List<Opt> operator [](OptionList l) => lists[l] ?? const [];
+
+  /// The guide given to new people (the one marked default in ERPNext, else the only one).
+  Guide? get defaultGuide => guides.where((g) => g.isDefault).firstOrNull ?? (guides.length == 1 ? guides.first : null);
+
+  factory OptionLists.fromJson(Map<String, dynamic> j) => OptionLists({
+    for (final l in OptionList.values) l: _opts(j[l.name]),
+  }, ((j['guide'] as List?) ?? const []).map((e) => Guide.fromJson(Map<String, dynamic>.from(e as Map))).toList());
+}
+
 class Person {
   const Person({
     required this.mob,
@@ -9,7 +62,14 @@ class Person {
     this.level = '',
     this.occupation = '',
     this.profession = '',
+    this.collegeId = '',
+    this.branch = '',
+    this.branchId = '',
+    this.skillList = const [],
+    this.interestList = const [],
     this.pgName = '',
+    this.pgId = '',
+    this.dob = '',
     this.eventCode = '',
     this.tag = 'Public',
     this.isActive = true,
@@ -18,11 +78,9 @@ class Person {
     this.registeredBy = '',
     this.joined = '',
     this.venue = '',
-    this.gmapLink = '',
-    this.callNo = '',
-    this.fgName = '',
-    this.fgMob = '',
-    this.folkGuide = '',
+    this.guide = '',
+    this.guideId = '',
+    this.guideMobile = '',
     this.age = 0,
     this.currentStay = '',
     this.skills = '',
@@ -33,9 +91,33 @@ class Person {
     this.callsCount = 0,
   });
 
-  final String id, mob, name, gender, level, occupation, profession, pgName, eventCode, tag, lastAttendedOn, registeredBy, joined;
-  final String venue, gmapLink, callNo, fgName, fgMob, folkGuide;
+  /// [profession] is the College / Company title (its ID is [collegeId]); [skills] and [interests] are the titles joined by commas.
+  final String id,
+      mob,
+      name,
+      gender,
+      level,
+      occupation,
+      profession,
+      collegeId,
+      branch,
+      branchId,
+      pgName,
+      pgId,
+      eventCode,
+      tag,
+      lastAttendedOn,
+      registeredBy,
+      joined;
+  final String venue;
+
+  /// Date of birth "YYYY-MM-DD" ('' = not given). [age] is worked out from it by the server (or is the age typed before dates of birth were asked).
+  final String dob;
+
+  /// FOLK guide: name (capitals), its ID in the guide list, and the guide's phone.
+  final String guide, guideId, guideMobile;
   final String currentStay, skills, interests, feedback, comments;
+  final List<Opt> skillList, interestList;
   final bool isActive;
   final int attendanceCount, age, chantingRounds;
 
@@ -60,7 +142,14 @@ class Person {
     level: j['level'] as String? ?? '',
     occupation: j['occupation'] as String? ?? '',
     profession: j['profession'] as String? ?? '',
+    collegeId: j['college_id'] as String? ?? '',
+    branch: j['branch'] as String? ?? '',
+    branchId: j['branch_id'] as String? ?? '',
+    skillList: _opts(j['skill_list']),
+    interestList: _opts(j['interest_list']),
     pgName: j['pg_name'] as String? ?? '',
+    pgId: j['pg_id'] as String? ?? '',
+    dob: j['dob'] as String? ?? '',
     eventCode: j['event_code'] as String? ?? '',
     tag: j['tag'] as String? ?? 'Public',
     isActive: j['is_active'] as bool? ?? true,
@@ -69,11 +158,9 @@ class Person {
     registeredBy: j['registered_by'] as String? ?? '',
     joined: j['joined'] as String? ?? '',
     venue: j['venue'] as String? ?? '',
-    gmapLink: j['gmap_link'] as String? ?? '',
-    callNo: j['call_no'] as String? ?? '',
-    fgName: j['fg_name'] as String? ?? '',
-    fgMob: j['fg_mob'] as String? ?? '',
-    folkGuide: j['folk_guide'] as String? ?? '',
+    guide: j['guide'] as String? ?? '',
+    guideId: j['guide_id'] as String? ?? '',
+    guideMobile: j['guide_mobile'] as String? ?? '',
     age: (j['age'] as num?)?.toInt() ?? 0,
     currentStay: j['current_stay'] as String? ?? '',
     skills: j['skills'] as String? ?? '',
@@ -92,7 +179,14 @@ class Person {
     'level': level,
     'occupation': occupation,
     'profession': profession,
+    'college_id': collegeId,
+    'branch': branch,
+    'branch_id': branchId,
+    'skill_list': [for (final o in skillList) o.toJson()],
+    'interest_list': [for (final o in interestList) o.toJson()],
     'pg_name': pgName,
+    'pg_id': pgId,
+    'dob': dob,
     'event_code': eventCode,
     'tag': tag,
     'is_active': isActive,
@@ -101,10 +195,9 @@ class Person {
     'registered_by': registeredBy,
     'joined': joined,
     'venue': venue,
-    'gmap_link': gmapLink,
-    'call_no': callNo,
-    'fg_name': fgName,
-    'fg_mob': fgMob,
+    'guide': guide,
+    'guide_id': guideId,
+    'guide_mobile': guideMobile,
     'age': age,
     'current_stay': currentStay,
     'skills': skills,

@@ -1,7 +1,6 @@
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import '../../core/cache.dart';
-import 'package:go_router/go_router.dart';
 
 import '../../core/api.dart';
 import '../../core/theme.dart';
@@ -10,15 +9,11 @@ import '../../core/widgets.dart';
 import '../admin/admin_repo.dart';
 import '../admin/link_card.dart';
 import '../auth/auth_controller.dart';
+import '../calls/calling_status_screen.dart';
 import '../../core/layout.dart';
 
-final homeStatsProvider = StreamProvider.autoDispose.family<({int registered, int marked}), String>((ref, event) {
-  return cachedGet(
-    ref,
-    '/home',
-    (r) => (registered: (r['registered'] as num?)?.toInt() ?? 0, marked: (r['marked_today'] as num?)?.toInt() ?? 0),
-    query: {'event': event},
-  );
+final homeStatsProvider = StreamProvider.autoDispose.family<int, String>((ref, event) {
+  return cachedGet(ref, '/home', (r) => (r['registered'] as num?)?.toInt() ?? 0, query: {'event': event});
 });
 
 /// A coordinator's calls for one event and which of the people they called came.
@@ -64,6 +59,7 @@ class _HomeScreenState extends ConsumerState<HomeScreen> with WidgetsBindingObse
     final e = ref.read(selectedEventProvider);
     if (state == AppLifecycleState.resumed && e != null) {
       ref.invalidate(homeStatsProvider(e));
+      ref.invalidate(callProgressProvider(e));
       if (ref.read(authProvider).value?.isCoordinator ?? false) ref.invalidate(myCallSummaryProvider(e));
     }
   }
@@ -74,7 +70,14 @@ class _HomeScreenState extends ConsumerState<HomeScreen> with WidgetsBindingObse
     final me = ref.watch(authProvider).value;
     final boot = ref.watch(bootstrapProvider);
     final event = ref.watch(selectedEventProvider);
-    final stats = event == null ? null : ref.watch(homeStatsProvider(event));
+    final registered = event == null ? null : ref.watch(homeStatsProvider(event));
+    final progress = event == null ? null : ref.watch(callProgressProvider(event));
+    final eventName = boot.value?.events.where((e) => e.code == event).firstOrNull?.name ?? event ?? '';
+    void openStatus() => Navigator.of(context, rootNavigator: true).push(
+      MaterialPageRoute<void>(
+        builder: (_) => CallingStatusScreen(event: event!, eventName: eventName),
+      ),
+    );
     final isCoordinator = me?.isCoordinator ?? false;
     final callSummary = (event == null || !isCoordinator) ? null : ref.watch(myCallSummaryProvider(event));
     final myLinks = (me?.isStaff ?? false) ? (ref.watch(myLinksProvider).value ?? const <Map<String, dynamic>>[]) : const <Map<String, dynamic>>[];
@@ -85,6 +88,7 @@ class _HomeScreenState extends ConsumerState<HomeScreen> with WidgetsBindingObse
         ref.invalidate(myLinksProvider);
         if (event != null) {
           ref.invalidate(homeStatsProvider(event));
+          ref.invalidate(callProgressProvider(event));
           if (isCoordinator) ref.invalidate(myCallSummaryProvider(event));
         }
       },
@@ -122,9 +126,38 @@ class _HomeScreenState extends ConsumerState<HomeScreen> with WidgetsBindingObse
               const SizedBox(height: 14),
               StatGrid(
                 children: [
-                  StatTile(icon: Icons.people_alt_rounded, label: 'Registered', value: stats?.value?.registered, color: context.colors.accent),
-                  StatTile(icon: Icons.how_to_reg_rounded, label: 'Present today', value: stats?.value?.marked, color: context.colors.success),
+                  StatTile(icon: Icons.people_alt_rounded, label: 'Signed up', value: registered?.value, color: context.colors.accent),
+                  StatTile(
+                    icon: Icons.assignment_ind_outlined,
+                    label: 'Assigned',
+                    value: progress?.value?.assigned,
+                    color: context.colors.brand,
+                    onTap: event == null ? null : openStatus,
+                  ),
+                  StatTile(
+                    icon: Icons.phone_in_talk_rounded,
+                    label: 'Called',
+                    value: progress?.value?.done,
+                    color: context.colors.success,
+                    onTap: event == null ? null : openStatus,
+                  ),
+                  StatTile(
+                    icon: Icons.pending_actions_rounded,
+                    label: 'Pending',
+                    value: progress?.value?.pending,
+                    color: context.colors.warning,
+                    onTap: event == null ? null : openStatus,
+                  ),
                 ],
+              ),
+              const SizedBox(height: kGapM),
+              SizedBox(
+                width: double.infinity,
+                child: FilledButton.icon(
+                  onPressed: event == null ? null : openStatus,
+                  icon: const Icon(Icons.leaderboard_rounded),
+                  label: const Text('Calling status'),
+                ),
               ),
               if (isCoordinator) ...[
                 const SizedBox(height: kGapM),
@@ -132,14 +165,14 @@ class _HomeScreenState extends ConsumerState<HomeScreen> with WidgetsBindingObse
                   children: [
                     StatTile(
                       icon: Icons.phone_in_talk_rounded,
-                      label: 'Calls made',
+                      label: 'My calls',
                       value: callSummary?.value?.called,
                       color: context.colors.brand,
                       onTap: callSummary?.value == null ? null : () => _showCalls(context, callSummary!.value!, cameOnly: false),
                     ),
                     StatTile(
                       icon: Icons.directions_walk_rounded,
-                      label: 'Came',
+                      label: 'My calls that came',
                       value: callSummary?.value?.came,
                       color: context.colors.success,
                       onTap: callSummary?.value == null ? null : () => _showCalls(context, callSummary!.value!, cameOnly: true),
@@ -149,20 +182,6 @@ class _HomeScreenState extends ConsumerState<HomeScreen> with WidgetsBindingObse
               ],
             ],
           ),
-        ),
-        const SectionTitle('Quick actions'),
-        ResponsiveGrid(
-          compact: 1,
-          medium: 2,
-          expanded: 3,
-          children: [
-            _ActionTile(icon: Icons.how_to_reg_outlined, title: 'Attendance', subtitle: 'Search, mark present, undo', route: '/attendance'),
-            _ActionTile(icon: Icons.person_add_alt_1_outlined, title: 'Register', subtitle: 'Add a new attendee', route: '/register'),
-            if (me?.isCoordinator ?? false)
-              _ActionTile(icon: Icons.phone_in_talk_outlined, title: 'My Calls', subtitle: 'Call contacts assigned to you', route: '/calls'),
-            if (me?.isAdmin ?? false)
-              _ActionTile(icon: Icons.admin_panel_settings_outlined, title: 'Admin', subtitle: 'People, calls, analytics, settings', route: '/admin'),
-          ],
         ),
         if (myLinks.isNotEmpty) ...[
           const SectionTitle('Your registration links'),
@@ -248,27 +267,4 @@ class _CallsSheet extends StatelessWidget {
       ),
     );
   }
-}
-
-/// A big tappable shortcut on the Home screen.
-class _ActionTile extends StatelessWidget {
-  const _ActionTile({required this.icon, required this.title, required this.subtitle, required this.route});
-  final IconData icon;
-  final String title, subtitle, route;
-  @override
-  Widget build(BuildContext context) => Card(
-    child: ListTile(
-      contentPadding: const EdgeInsets.symmetric(horizontal: kGapL, vertical: 10),
-      leading: CircleAvatar(
-        radius: 26,
-        backgroundColor: Theme.of(context).colorScheme.primaryContainer,
-        foregroundColor: context.colors.brand,
-        child: Icon(icon, size: 28),
-      ),
-      title: Text(title, style: Theme.of(context).textTheme.titleSmall),
-      subtitle: Text(subtitle),
-      trailing: const Icon(Icons.chevron_right_rounded),
-      onTap: () => context.go(route),
-    ),
-  );
 }

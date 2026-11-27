@@ -6,6 +6,7 @@ import 'package:shared_preferences/shared_preferences.dart';
 import '../../core/api.dart';
 import '../../core/cache.dart';
 import '../../core/models.dart';
+import '../../core/push.dart';
 
 const _userKey = 'folk_user';
 const _bootKey = 'folk_bootstrap';
@@ -73,6 +74,7 @@ class AuthController extends AsyncNotifier<Person?> {
       _accept(await ref.read(apiProvider).post('/auth/otp/verify', body: {'mob': mob, 'otp': otp}));
 
   Future<void> signOut() async {
+    await forgetPushToken(ref.read(apiProvider));
     await ref.read(tokenStoreProvider).clear();
     final prefs = await SharedPreferences.getInstance();
     await prefs.remove(_userKey);

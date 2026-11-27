@@ -42,6 +42,9 @@
     For more details:
     * https://docs.flutter.dev/platform-integration/web/initialization
   -->
-  <script src="flutter_bootstrap.js" async></script>
+  <!-- Inlined (not a separate file) so a new release is picked up on the next visit; see web/flutter_bootstrap.js. -->
+  <script>
+    {{flutter_bootstrap_js}}
+  </script>
 </body>
 </html>

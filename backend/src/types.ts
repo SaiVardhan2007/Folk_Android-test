@@ -12,10 +12,12 @@ export type Bindings = {
   MSG91_OTP_TEMPLATE_ID?: string;
   /** "1" once the MSG91 template ends with ##hash## (lets Android read the code with no prompt). */
   OTP_SMS_HAS_APP_HASH?: string;
-  /** Used in the welcome message when the contact has no venue / map link / FOLK guide number (call_no) of their own. */
+  /** Used in the welcome message when the contact has no venue / map link / FOLK guide (with a phone) of their own. */
   WELCOME_VENUE?: string;
   WELCOME_MAP_LINK?: string;
   DEFAULT_GUIDE_MOB?: string;
+  /** Firebase service-account key (JSON text, Worker secret). Without it notifications are skipped. */
+  FCM_SERVICE_ACCOUNT?: string;
   /** The shared print queue (a Durable Object, see printHub.ts). */
   PRINT_HUB: DurableObjectNamespace;
   AUTH_LIMITER?: { limit(o: { key: string }): Promise<{ success: boolean }> };

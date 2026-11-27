@@ -20,13 +20,12 @@ class CallItem {
     required this.assignedAt,
     required this.level,
     required this.venue,
-    required this.gmapLink,
     required this.pgName,
     required this.profession,
     required this.sessions,
     required this.calls28d,
   });
-  final String id, mob, name, eventName, status, note, submittedAt, assignedAt, level, venue, gmapLink, pgName, profession;
+  final String id, mob, name, eventName, status, note, submittedAt, assignedAt, level, venue, pgName, profession;
   final bool isFollowUp;
   final int sessions, calls28d;
 
@@ -44,7 +43,6 @@ class CallItem {
     assignedAt: j['assigned_at'] as String? ?? '',
     level: j['level'] as String? ?? '',
     venue: j['venue'] as String? ?? '',
-    gmapLink: j['gmap_link'] as String? ?? '',
     pgName: j['pg_name'] as String? ?? '',
     profession: j['profession'] as String? ?? '',
     sessions: (j['sessions'] as num?)?.toInt() ?? 0,

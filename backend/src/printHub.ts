@@ -35,6 +35,7 @@ export class PrintHub extends DurableObject<Bindings> {
       this.dispatch();
       return new Response(null, { status: 101, webSocket: client });
     }
+    if (path === "/status") return Response.json({ stations: this.ctx.getWebSockets().length });
     if (path === "/enqueue" && req.method === "POST") {
       const { key, data } = (await req.json()) as { key: string; data: unknown };
       this.sql.exec("INSERT OR IGNORE INTO jobs (key, data, created) VALUES (?, ?, ?)", key, JSON.stringify(data), Date.now());

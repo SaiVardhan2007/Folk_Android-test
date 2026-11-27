@@ -49,3 +49,8 @@ dependencies {
 flutter {
     source = "../.."
 }
+
+// Notifications need the Firebase file from the Firebase console. Without it the app still builds and runs, just without notifications.
+if (file("google-services.json").exists()) {
+    apply(plugin = "com.google.gms.google-services")
+}

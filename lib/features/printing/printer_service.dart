@@ -1,6 +1,8 @@
 import 'dart:async';
+import 'dart:typed_data';
 import 'dart:ui' as ui;
 
+import 'package:flutter/foundation.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:shared_preferences/shared_preferences.dart';
@@ -109,9 +111,10 @@ class PrinterService {
   Future<void> _write(Uint8List data) => _call<bool>('write', {'data': data});
 
   /// Converts the picture to 1-bit and prints it (ESC/POS raster, in small slices the printer handles reliably), then feeds and cuts.
-  Future<void> printImage(ui.Image image, {int threshold = 150}) => _serially(() => _printImage(image, threshold));
+  Future<void> printImage(ui.Image image, {int threshold = 150, bool continuous = false}) =>
+      _serially(() => _printImage(image, threshold, continuous));
 
-  Future<void> _printImage(ui.Image image, int threshold) async {
+  Future<void> _printImage(ui.Image image, int threshold, bool continuous) async {
     final bd = await image.toByteData(format: ui.ImageByteFormat.rawRgba);
     final w = image.width, h = image.height;
     final bytesPerRow = (w + 7) ~/ 8;
@@ -129,6 +132,23 @@ class PrinterService {
 
     await _write(Uint8List.fromList([0x1B, 0x40])); // initialise
     await Future.delayed(const Duration(milliseconds: 500)); // the printer ignores or garbles data sent while it resets
+    if (continuous) {
+      // TEST B: the whole picture in one write, no pauses; Bluetooth flow control sets the pace.
+      final body = BytesBuilder(copy: false);
+      for (var y = 0; y < total; y += 255) {
+        final n = (total - y) < 255 ? (total - y) : 255;
+        body.add([0x1D, 0x76, 0x30, 0x00, bytesPerRow & 255, bytesPerRow >> 8, n & 255, n >> 8]);
+        body.add(out.sublist(y * bytesPerRow, (y + n) * bytesPerRow));
+      }
+      final bytes = body.takeBytes();
+      final t = Stopwatch()..start();
+      await _write(bytes);
+      debugPrint('PRINTTEST B: wrote ${bytes.length} bytes in ${t.elapsedMilliseconds} ms ($total rows)');
+      await Future.delayed(const Duration(milliseconds: 600));
+      await _write(Uint8List.fromList([0x1D, 0x56, 0x42, 0x00]));
+      return;
+    }
+    final t = Stopwatch()..start();
     // Small slices, each followed by a pause that grows with how dark the slice is. A dark slice (the logo) takes a thermal head much
     // longer to burn than text; a fixed pause let the printer's small buffer overflow there, and whole slices were dropped
     // (a white gap in the middle and a stretched picture).
@@ -145,7 +165,9 @@ class PrinterService {
       }
       final dark = dots / (n * w); // 0 = blank paper, 1 = solid black
       final header = [0x1D, 0x76, 0x30, 0x00, bytesPerRow & 255, bytesPerRow >> 8, n & 255, n >> 8];
+      final w0 = t.elapsedMilliseconds;
       await _write(Uint8List.fromList([...header, ...slice]));
+      debugPrint('PRINTTEST A: slice y=$y dark=${dark.toStringAsFixed(2)} write=${t.elapsedMilliseconds - w0} ms');
       await Future.delayed(Duration(milliseconds: 150 + (1000 * dark).round()));
     }
     await Future.delayed(const Duration(milliseconds: 600)); // let the printer finish moving paper before the cut
@@ -154,3 +176,14 @@ class PrinterService {
 }
 
 final printerServiceProvider = Provider<PrinterService>((ref) => PrinterService());
+
+/// Whether THIS phone is connected to a printer (updates the moment it connects or disconnects).
+final printerHereProvider = StreamProvider<bool>((ref) async* {
+  final p = ref.watch(printerServiceProvider);
+  try {
+    yield await p.isConnected;
+  } catch (_) {
+    yield false;
+  }
+  yield* p.connectionChanges;
+});

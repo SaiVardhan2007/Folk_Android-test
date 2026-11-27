@@ -8,7 +8,7 @@ import '../../core/theme.dart';
 import '../../core/widgets.dart';
 import '../auth/auth_controller.dart';
 import 'admin_repo.dart';
-import 'assign_screen.dart';
+import 'assign/assign_wizard.dart';
 import 'templates_editor.dart';
 import '../../core/layout.dart';
 
@@ -47,48 +47,14 @@ class CallsAdminTab extends ConsumerWidget {
     ref.invalidate(_statsProvider);
   }
 
-  Future<void> _openAssign(BuildContext context, WidgetRef ref, String event, Bootstrap? boot) async {
+  Future<void> _openAssign(BuildContext context, WidgetRef ref, String event, Bootstrap? boot, {bool reassign = false}) async {
     final name = boot?.eventsAndLists.where((e) => e.code == event).firstOrNull?.name ?? event;
     final done = await Navigator.of(context, rootNavigator: true).push<bool>(
       MaterialPageRoute(
-        builder: (_) => AssignScreen(event: event, eventName: name),
+        builder: (_) => AssignWizard(event: event, eventName: name, reassignUnstarted: reassign),
       ),
     );
     if (done == true) _refresh(ref);
-  }
-
-  Future<void> _confirmRun(
-    BuildContext context,
-    WidgetRef ref, {
-    required String title,
-    required String body,
-    required String button,
-    required Future<String> Function() run,
-    bool danger = false,
-  }) async {
-    final ok = await showDialog<bool>(
-      context: context,
-      builder: (c) => AlertDialog(
-        title: Text(title),
-        content: Text(body),
-        actions: [
-          TextButton(onPressed: () => Navigator.pop(c, false), child: const Text('Cancel')),
-          FilledButton(
-            style: FilledButton.styleFrom(minimumSize: const Size(100, 48), backgroundColor: danger ? context.colors.danger : null),
-            onPressed: () => Navigator.pop(c, true),
-            child: Text(button),
-          ),
-        ],
-      ),
-    );
-    if (ok != true || !context.mounted) return;
-    try {
-      final msg = await run();
-      _refresh(ref);
-      if (context.mounted) showMessage(context, msg);
-    } on ApiException catch (e) {
-      if (context.mounted) showMessage(context, e.message, error: true);
-    }
   }
 
   @override
@@ -128,21 +94,9 @@ class CallsAdminTab extends ConsumerWidget {
               label: const Text('Assign calls'),
             ),
             OutlinedButton.icon(
-              onPressed: event == null
-                  ? null
-                  : () => _confirmRun(
-                      context,
-                      ref,
-                      title: 'Remove unstarted calls?',
-                      button: 'Remove',
-                      danger: true,
-                      body:
-                          'Takes back every assigned contact nobody has called yet for this event. Contacts already called stay with their coordinator, and no history is deleted.',
-                      run: () async => '${await repo.unassign(event)} call(s) removed.',
-                    ),
-              icon: const Icon(Icons.person_remove_outlined),
-              label: const Text('Remove unstarted'),
-              style: OutlinedButton.styleFrom(foregroundColor: context.colors.danger),
+              onPressed: event == null ? null : () => _openAssign(context, ref, event, boot, reassign: true),
+              icon: const Icon(Icons.swap_horiz),
+              label: const Text('Reassign Unstarted'),
             ),
             OutlinedButton.icon(
               onPressed: () => showModalBottomSheet<void>(
@@ -179,8 +133,7 @@ class CallsAdminTab extends ConsumerWidget {
                         Padding(
                           padding: const EdgeInsets.only(bottom: kGapS),
                           child: Text(
-                            'This week only (Monday ${_shortDate('${(s['period'] as Map)['from']}')} to Sunday ${_shortDate('${(s['period'] as Map)['to']}')}). '
-                            'Calls made and positive start again from zero every Monday; nothing is deleted.',
+                            'This week only (Monday ${_shortDate('${(s['period'] as Map)['from']}')} to Sunday ${_shortDate('${(s['period'] as Map)['to']}')})',
                             style: text.bodyMedium,
                           ),
                         ),
@@ -228,7 +181,7 @@ class CallsAdminTab extends ConsumerWidget {
           data: (list) => list.isEmpty
               ? Padding(
                   padding: const EdgeInsets.all(24),
-                  child: Text('No coordinators yet. People who sign up and are approved appear here.', style: text.bodyLarge),
+                  child: Text('No coordinators yet.', style: text.bodyLarge),
                 )
               : Column(
                   children: [
@@ -296,7 +249,7 @@ class CallsAdminTab extends ConsumerWidget {
           keyboardType: TextInputType.number,
           inputFormatters: [FilteringTextInputFormatter.digitsOnly, LengthLimitingTextInputFormatter(4)],
           autofocus: true,
-          decoration: const InputDecoration(helperText: 'Most contacts they can be given. Leave empty for no limit.'),
+          decoration: const InputDecoration(labelText: 'Call limit (empty = none)'),
         ),
         actions: [
           TextButton(onPressed: () => Navigator.pop(d), child: const Text('Cancel')),
@@ -328,10 +281,6 @@ class _TemplatesSheet extends StatelessWidget {
       children: [
         Text('WhatsApp messages', style: text.titleLarge),
         const SizedBox(height: 4),
-        Text(
-          'The selected message is sent by the Send Message button, after "Hare Krishna <name>". You can use {name} inside it.',
-          style: text.bodyMedium,
-        ),
         const SizedBox(height: 12),
         TemplatesEditor(onSaved: () => Navigator.pop(context)),
       ],

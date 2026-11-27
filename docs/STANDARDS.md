@@ -9,6 +9,8 @@ Every change follows this file. If a rule here is wrong, change the rule first, 
 | Breakpoints (phone / tablet / laptop), spacing scale (`kGapS..kGapXL`), `ResponsiveGrid` | `lib/core/layout.dart` |
 | Shared widgets: `PageBody`, `SectionTitle`, `FieldGrid`, `StatTile`, `StatGrid`, `SheetBody`, `StatusBanner`, `ErrorView`, `AppLogo`, `EventPicker`, `OptionDropdown` | `lib/core/widgets.dart` |
 | Data cache + "show saved data then refresh" | `lib/core/cache.dart` (`cachedGet`) |
+| Dropdowns stored by ID that staff can extend (College / Company, Branch, Skills, Interests): `OptionPicker`, `MultiOptionPicker` (type to filter; a small Add appears when nothing matches). Lists come from `optionsProvider`; Add is `addOption`. A list value is a record in ERPNext (`FOLK College`, `FOLK Branch`, `FOLK Skill`, `FOLK Interest`): people store its ID, so editing its Title in ERPNext renames it everywhere. | `lib/core/option_picker.dart`, `lib/core/options.dart` |
+| FOLK Guide: `GuideDropdown` (no Add; guides are added in ERPNext `FOLK Guide` with Title in capitals + Mobile). People store the guide's ID; the guide's phone is read from the guide (WhatsApp welcome, receipt fields `{guide}` / `{guide_phone}`), never stored per person. | `lib/features/register/person_form.dart` |
 | HTTP client, errors | `lib/core/api.dart` |
 | Refresh timing constants | `lib/core/config.dart` |
 

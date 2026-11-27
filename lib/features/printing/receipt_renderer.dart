@@ -117,5 +117,7 @@ Map<String, String> receiptValues(ReceiptData d) {
     'time': hasTime ? shortTime(d.ts) : '',
     'count': d.count > 0 ? '${d.count} time${d.count == 1 ? '' : 's'}' : '',
     'marked_by': d.markedBy,
+    'guide': d.guide,
+    'guide_phone': d.guideMobile,
   };
 }

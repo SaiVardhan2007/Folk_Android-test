@@ -1,5 +1,8 @@
+import 'dart:ui' as ui;
+
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
+import 'package:qr_flutter/qr_flutter.dart';
 import 'package:share_plus/share_plus.dart';
 
 import '../../core/layout.dart';
@@ -12,6 +15,63 @@ Future<void> shareLink(Map<String, dynamic> link) =>
 Future<void> copyLink(BuildContext context, Map<String, dynamic> link) async {
   await Clipboard.setData(ClipboardData(text: '${link['url'] ?? ''}'));
   if (context.mounted) showMessage(context, 'Link copied');
+}
+
+/// The link's QR code in a pop-up. "Share image" opens the phone's share sheet with the QR as a picture (copy, save, or send it).
+Future<void> showQr(BuildContext context, Map<String, dynamic> link) {
+  final url = '${link['url'] ?? ''}';
+  final title = '${link['title'] ?? ''}';
+  return showDialog<void>(
+    context: context,
+    builder: (ctx) => AlertDialog(
+      title: Text(title),
+      content: SizedBox(
+        width: 280,
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            ColoredBox(
+              color: Colors.white,
+              child: QrImageView(data: url, size: 260, padding: const EdgeInsets.all(12), backgroundColor: Colors.white),
+            ),
+            const SizedBox(height: kGapM),
+            SelectableText(url, textAlign: TextAlign.center),
+          ],
+        ),
+      ),
+      actions: [
+        TextButton(onPressed: () => Navigator.pop(ctx), child: const Text('Close')),
+        FilledButton.icon(
+          icon: const Icon(Icons.ios_share),
+          label: const Text('Share image'),
+          onPressed: () async {
+            final painter = QrPainter(
+              data: url,
+              version: QrVersions.auto,
+              gapless: true,
+              eyeStyle: const QrEyeStyle(color: Colors.black),
+              dataModuleStyle: const QrDataModuleStyle(color: Colors.black),
+            );
+            // A white border around the code so it scans when pasted on any background.
+            final rec = ui.PictureRecorder();
+            final canvas = Canvas(rec);
+            const size = 1000.0, pad = 80.0;
+            canvas.drawRect(const Rect.fromLTWH(0, 0, size + 2 * pad, size + 2 * pad), Paint()..color = Colors.white);
+            canvas.translate(pad, pad);
+            painter.paint(canvas, const Size(size, size));
+            final img = await rec.endRecording().toImage((size + 2 * pad).toInt(), (size + 2 * pad).toInt());
+            final bytes = (await img.toByteData(format: ui.ImageByteFormat.png))!.buffer.asUint8List();
+            await SharePlus.instance.share(
+              ShareParams(
+                files: [XFile.fromData(bytes, mimeType: 'image/png', name: 'qr.png')],
+                fileNameOverrides: ['qr.png'],
+              ),
+            );
+          },
+        ),
+      ],
+    ),
+  );
 }
 
 /// The icon and name of a link's type, and the word for what people send through it.
@@ -47,8 +107,11 @@ class LinkCard extends StatelessWidget {
             Row(
               children: [
                 Expanded(child: Text(_title, style: text.titleSmall)),
-                if (onToggleOpen != null) Switch(value: _open, onChanged: onToggleOpen),
-                if (onToggleOpen == null && !_open) const Chip(label: Text('Closed'), visualDensity: VisualDensity.compact),
+                if (onToggleOpen != null) ...[
+                  Text(_open ? 'Active' : 'Inactive', style: text.labelLarge),
+                  Switch(value: _open, onChanged: onToggleOpen),
+                ],
+                if (onToggleOpen == null && !_open) const Chip(label: Text('Inactive'), visualDensity: VisualDensity.compact),
               ],
             ),
             Wrap(
@@ -86,6 +149,12 @@ class LinkCard extends StatelessWidget {
                   onPressed: () => copyLink(context, link),
                   icon: const Icon(Icons.copy_outlined),
                   label: const Text('Copy'),
+                  style: OutlinedButton.styleFrom(minimumSize: const Size(0, 48)),
+                ),
+                OutlinedButton.icon(
+                  onPressed: () => showQr(context, link),
+                  icon: const Icon(Icons.qr_code_2),
+                  label: const Text('QR'),
                   style: OutlinedButton.styleFrom(minimumSize: const Size(0, 48)),
                 ),
                 if (onEdit != null)
@@ -137,10 +206,10 @@ class EventLinkTile extends StatelessWidget {
                   style: text.titleSmall,
                 ),
               ),
+              Text(open ? 'Active' : 'Inactive', style: text.labelLarge),
               Switch(value: open, onChanged: onToggleOpen),
             ],
           ),
-          Text(open ? 'Open: anyone with the link can fill it.' : 'Closed: the link shows "closed".', style: text.bodyMedium),
           const SizedBox(height: kGapS),
           SelectableText('${link['url'] ?? ''}', style: text.bodyMedium),
           const SizedBox(height: kGapS),
@@ -158,6 +227,12 @@ class EventLinkTile extends StatelessWidget {
                 onPressed: () => copyLink(context, link),
                 icon: const Icon(Icons.copy_outlined),
                 label: const Text('Copy'),
+                style: OutlinedButton.styleFrom(minimumSize: const Size(0, 48)),
+              ),
+              OutlinedButton.icon(
+                onPressed: () => showQr(context, link),
+                icon: const Icon(Icons.qr_code_2),
+                label: const Text('QR'),
                 style: OutlinedButton.styleFrom(minimumSize: const Size(0, 48)),
               ),
               OutlinedButton.icon(

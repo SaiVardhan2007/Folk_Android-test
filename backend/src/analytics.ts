@@ -49,7 +49,7 @@ export async function analytics(erp: Erp, f: Filter, tags: string[]) {
   if (f.event) rowFilters.push(["event_code", "=", f.event]);
 
   const [everyone, rowsAll] = await Promise.all([
-    erp.list<P>("FOLK Users", ["name", "mob_no", "full_name", "gender", "level", "pg_name", "profession", "event_code", "user_tag", "registered_by", "creation", "registered_on"]),
+    erp.list<P>("FOLK Users", ["name", "mob_no", "full_name", "gender", "level", "pg.title as pg_name", "college.title as profession", "event_code", "user_tag", "registered_by", "creation", "registered_on"]),
     erp.list<A>("FOLK Attendance", ["person", "event_code", "attendance_date", "marked_by"], rowFilters),
   ]);
 

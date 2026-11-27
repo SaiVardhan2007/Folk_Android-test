@@ -3,6 +3,8 @@
     <uses-permission android:name="android.permission.INTERNET"/>
     <!-- Lets the Call button start the call straight from the app. -->
     <uses-permission android:name="android.permission.CALL_PHONE"/>
+    <!-- Notifications (Android 13 and newer ask the user). -->
+    <uses-permission android:name="android.permission.POST_NOTIFICATIONS"/>
     <uses-feature android:name="android.hardware.telephony" android:required="false"/>
     <!-- Receipt printer: Bluetooth (older and newer Android) and USB (OTG cable). -->
     <uses-permission android:name="android.permission.BLUETOOTH" android:maxSdkVersion="30"/>

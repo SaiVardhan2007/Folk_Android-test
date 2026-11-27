@@ -4,7 +4,7 @@
   "main": "src/index.ts",
   "compatibility_date": "2026-09-01",
   "compatibility_flags": ["nodejs_compat"],
-  // Non-secret settings. Secrets (ERPNEXT_API_KEY, ERPNEXT_API_SECRET, JWT_SECRET, WHATSAPP_API_KEY, MSG91_AUTH_KEY, MSG91_OTP_TEMPLATE_ID) are set with `wrangler secret put`.
+  // Non-secret settings. Secrets (ERPNEXT_API_KEY, ERPNEXT_API_SECRET, JWT_SECRET, WHATSAPP_API_KEY, MSG91_AUTH_KEY, MSG91_OTP_TEMPLATE_ID, FCM_SERVICE_ACCOUNT) are set with `wrangler secret put`.
   "vars": {
     "ERPNEXT_URL": "https://erp.hkmh.in",
     "MAIN_ADMIN_MOB": "9133318576",
@@ -26,5 +26,7 @@
     // Public registration pages: lookups and submissions per IP (stops number-guessing and spam).
     { "name": "PUBLIC_LIMITER", "namespace_id": "1002", "simple": { "limit": 30, "period": 60 } }
   ],
+  // Friday 13:00 UTC = 6:30 pm India: reminds admins to assign calls if none were assigned that day (src/index.ts fridayReminder).
+  "triggers": { "crons": ["0 13 * * 5"] },
   "observability": { "enabled": true }
 }

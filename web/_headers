@@ -1,0 +1,4 @@
+# Flutter web file names (main.dart.js, flutter_bootstrap.js, assets) do not change between releases, so browsers must check for a
+# newer copy on every load (unchanged files come back as a small 304). Without this the domain's 4-hour browser cache kept old releases.
+/*
+  Cache-Control: no-cache

@@ -2,6 +2,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:go_router/go_router.dart';
 
+import '../../core/push.dart';
 import '../../core/theme.dart';
 import '../../core/widgets.dart';
 import '../auth/auth_controller.dart';
@@ -30,6 +31,7 @@ class AppShell extends ConsumerWidget {
   @override
   Widget build(BuildContext context, WidgetRef ref) {
     final me = ref.watch(authProvider).value;
+    ref.watch(pushProvider); // sends this phone's notification token to the server
     ref.watch(printStationProvider); // becomes the printing phone for everyone while this phone is connected to the printer
     final dests = [
       _home,

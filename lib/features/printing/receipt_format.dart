@@ -7,6 +7,8 @@ const kReceiptFields = <({String key, String label})>[
   (key: 'time', label: 'Time'),
   (key: 'count', label: 'Times attended'),
   (key: 'marked_by', label: 'Marked by'),
+  (key: 'guide', label: 'FOLK Guide'),
+  (key: 'guide_phone', label: 'FOLK Guide phone'),
 ];
 
 /// What the attendance receipt shows. Set by an admin (Admin → Settings), shared by every phone.
@@ -74,8 +76,20 @@ class ReceiptFormat {
 
 /// The facts printed on one receipt.
 class ReceiptData {
-  const ReceiptData({required this.name, required this.mob, required this.event, required this.ts, required this.count, this.markedBy = ''});
+  const ReceiptData({
+    required this.name,
+    required this.mob,
+    required this.event,
+    required this.ts,
+    required this.count,
+    this.markedBy = '',
+    this.guide = '',
+    this.guideMobile = '',
+  });
   final String name, mob, event, markedBy;
+
+  /// The person's FOLK guide (e.g. VKGD) and the guide's phone.
+  final String guide, guideMobile;
 
   /// "YYYY-MM-DD HH:mm:ss" (India time).
   final String ts;

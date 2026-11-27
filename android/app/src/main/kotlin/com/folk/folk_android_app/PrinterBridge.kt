@@ -91,8 +91,10 @@ class PrinterBridge(private val activity: Activity, messenger: BinaryMessenger) 
                         val dev = adapter.getRemoteDevice(address)
                         // Some printers ignore the normal (SDP-looked-up) connection and hang, so try other ways in turn.
                         val attempts: List<Pair<String, () -> BluetoothSocket>> = listOf(
-                            "secure SPP" to { dev.createRfcommSocketToServiceRecord(sppUuid) },
+                            // Insecure first: it never asks the user to confirm a pairing code. A "secure" connection to a printer whose pairing
+                            // is stale (it was paired with another phone since) pops up a code prompt that ends in "incorrect code".
                             "insecure SPP" to { dev.createInsecureRfcommSocketToServiceRecord(sppUuid) },
+                            "secure SPP" to { dev.createRfcommSocketToServiceRecord(sppUuid) },
                             "channel 1" to {
                                 @Suppress("UNCHECKED_CAST")
                                 dev.javaClass.getMethod("createRfcommSocket", Int::class.javaPrimitiveType)

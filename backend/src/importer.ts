@@ -8,7 +8,7 @@ export const MAX_IMPORT_ROWS = 3000;
 export const MAX_IMPORT_BYTES = 2_000_000;
 
 /** Contact fields an import can fill. `mob` and `name` are required. */
-export const IMPORT_FIELDS = ["mob", "name", "level", "gender", "occupation", "profession", "pg_name", "venue", "gmap_link", "call_no", "fg_name", "fg_mob", "event_code"] as const;
+export const IMPORT_FIELDS = ["mob", "name", "level", "gender", "occupation", "profession", "pg_name", "venue", "guide", "event_code"] as const;
 export type ImportField = (typeof IMPORT_FIELDS)[number];
 export type Mapping = Partial<Record<ImportField, number>>; // field -> column index
 
@@ -66,16 +66,13 @@ const HINTS: Record<ImportField, RegExp> = {
   profession: /(profession|company|college|organi[sz]ation|institute|work ?place|employer)/i,
   pg_name: /(pg|hostel|residence|stay|area|locality)/i,
   venue: /(venue|location|address|place)/i,
-  gmap_link: /(g ?map|google map|map link|maps)/i,
-  call_no: /(call (no|number)|helpline|call to)/i,
-  fg_name: /(fg name|guide name|folk guide|guide)/i,
-  fg_mob: /(fg (mob|phone|number)|guide (mob|phone|number))/i,
+  guide: /(fg name|guide name|folk guide|guide)/i,
   event_code: /(event|session|programme|program)/i,
 };
 
 /** Suggests which column holds which field, from the header texts. Each column is used once; the most specific fields claim first. */
 export function guessMapping(headers: string[]): Mapping {
-  const order: ImportField[] = ["fg_mob", "fg_name", "gmap_link", "call_no", "mob", "name", "gender", "level", "occupation", "pg_name", "venue", "profession", "event_code"];
+  const order: ImportField[] = ["guide", "mob", "name", "gender", "level", "occupation", "pg_name", "venue", "profession", "event_code"];
   const used = new Set<number>(), out: Mapping = {};
   for (const f of order) {
     const i = headers.findIndex((h, idx) => !used.has(idx) && HINTS[f].test(h));
@@ -118,10 +115,8 @@ export interface ImportRow {
   profession: string;
   pg_name: string;
   venue: string;
-  gmap_link: string;
-  call_no: string;
-  fg_name: string;
-  fg_mob: string;
+  /** FOLK Guide name, only when it is already in the guide list (guides are added in ERPNext only), else "". */
+  guide: string;
   event_code: string;
 }
 
@@ -131,7 +126,7 @@ export interface Built { rows: ImportRow[]; invalid: { line: number; reason: str
 export function buildRows(
   table: string[][],
   map: Mapping,
-  opts: { defaultLevel: string; normalizeMobile: (v: unknown) => string | null; knownEvent: (v: string) => string },
+  opts: { defaultLevel: string; normalizeMobile: (v: unknown) => string | null; knownEvent: (v: string) => string; knownGuide: (v: string) => string },
 ): Built {
   const rows: ImportRow[] = [], invalid: Built["invalid"] = [];
   const seen = new Set<string>();
@@ -148,8 +143,8 @@ export function buildRows(
     rows.push({
       line: r + 1, mob, name: name.slice(0, 120),
       level: cleanLevel(get("level"), opts.defaultLevel), gender: cleanGender(get("gender")), occupation: cleanOccupation(get("occupation")),
-      profession: get("profession").slice(0, 120), pg_name: get("pg_name").slice(0, 120), venue: get("venue").slice(0, 200), gmap_link: get("gmap_link").slice(0, 500),
-      call_no: opts.normalizeMobile(get("call_no")) ?? "", fg_name: get("fg_name").slice(0, 120), fg_mob: opts.normalizeMobile(get("fg_mob")) ?? "",
+      profession: get("profession").slice(0, 120), pg_name: get("pg_name").slice(0, 120), venue: get("venue").slice(0, 200),
+      guide: opts.knownGuide(get("guide")),
       event_code: opts.knownEvent(get("event_code")),
     });
   }

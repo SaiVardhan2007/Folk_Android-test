@@ -4,7 +4,7 @@
 import type { Bindings } from "./types";
 
 export type TemplateMessage = { to: string; template: string; params: string[] };
-type ContactLike = { mob_no: string; full_name: string; venue?: string; gmap_link?: string; call_no?: string };
+type ContactLike = { mob_no: string; full_name: string; venue?: string; guide_mobile?: string | null };
 
 const text = (v: unknown, fallback = "-") => {
   const s = v === undefined || v === null ? "" : String(v).trim();
@@ -20,7 +20,7 @@ export const defaultsOf = (env: Bindings): Defaults => ({ venue: env.WELCOME_VEN
 /** The welcome message for a contact who was just created or registered for an event. It goes to that contact only. */
 export function welcomeMessage(p: ContactLike, eventName: string, welcomeTemplate = "event_registration", d: Defaults = {}): TemplateMessage | null {
   if (!p.mob_no) return null;
-  return { to: wa(p.mob_no), template: welcomeTemplate, params: [text(p.full_name, "Friend"), text(eventName), text(p.venue || d.venue), text(p.gmap_link || d.map), text(p.call_no || d.guideMob)] };
+  return { to: wa(p.mob_no), template: welcomeTemplate, params: [text(p.full_name, "Friend"), text(eventName), text(p.venue || d.venue), text(d.map), text(p.guide_mobile || d.guideMob)] };
 }
 
 export async function sendTemplate(env: Bindings, m: TemplateMessage): Promise<boolean> {

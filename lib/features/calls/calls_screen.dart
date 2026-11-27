@@ -162,6 +162,8 @@ class _CallCardState extends ConsumerState<_CallCard> {
 
   void _remember() => CallDraft(called: _called, messaged: _messaged, status: _status, note: _note).save(item.id);
 
+  static const _notInterested = 'Not Interested'; // same text as the role; submitting it changes the contact's role (backend)
+
   CallItem get item => widget.item;
   CallsData get d => widget.data;
   bool get _first => item.isPending;
@@ -207,13 +209,27 @@ class _CallCardState extends ConsumerState<_CallCard> {
       builder: (ctx) => StatefulBuilder(
         builder: (ctx, set) => AlertDialog(
           title: Text(required ? 'Note needed' : 'Add a note?'),
-          content: TextField(
-            controller: c,
-            autofocus: true,
-            maxLines: 4,
-            onChanged: (_) => set(() {}),
-            textCapitalization: TextCapitalization.sentences,
-            decoration: InputDecoration(hintText: required ? 'Write what happened (required for "$status")' : 'Optional'),
+          content: Column(
+            mainAxisSize: MainAxisSize.min,
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              if (status == _notInterested)
+                Padding(
+                  padding: const EdgeInsets.only(bottom: 12),
+                  child: Text(
+                    'On Submit, this contact is marked "Not Interested" and will not be given to anyone for calling again.',
+                    style: Theme.of(ctx).textTheme.bodyMedium,
+                  ),
+                ),
+              TextField(
+                controller: c,
+                autofocus: true,
+                maxLines: 4,
+                onChanged: (_) => set(() {}),
+                textCapitalization: TextCapitalization.sentences,
+                decoration: InputDecoration(hintText: required ? 'Write what happened (required for "$status")' : 'Optional'),
+              ),
+            ],
           ),
           actions: [
             TextButton(onPressed: () => Navigator.pop(ctx), child: const Text('Cancel')),
@@ -247,7 +263,9 @@ class _CallCardState extends ConsumerState<_CallCard> {
     try {
       await ref.read(callsRepoProvider).submit(item.id, status: _status, note: _note, ref: _ref);
       HapticFeedback.mediumImpact();
-      if (mounted) showMessage(context, 'Thanks for submitting 🙏');
+      if (mounted) {
+        showMessage(context, _status == _notInterested ? 'Marked Not Interested. They won\'t be called again 🙏' : 'Thanks for submitting 🙏');
+      }
       _ref = CallsRepo.newRef();
       await CallDraft.clear(item.id);
       ref.invalidate(callsProvider);

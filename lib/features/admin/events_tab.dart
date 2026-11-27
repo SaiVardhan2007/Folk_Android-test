@@ -62,7 +62,7 @@ class _EventsTabState extends ConsumerState<EventsTab> with AutomaticKeepAliveCl
               TextFormField(
                 controller: code,
                 textCapitalization: TextCapitalization.characters,
-                decoration: const InputDecoration(labelText: 'Short code', helperText: 'e.g. SUNDAY, YOUTH1 (letters and numbers)'),
+                decoration: const InputDecoration(labelText: 'Short code'),
                 validator: (v) => (v ?? '').trim().isEmpty ? 'Enter a code' : null,
               ),
             ],
@@ -109,11 +109,6 @@ class _EventsTabState extends ConsumerState<EventsTab> with AutomaticKeepAliveCl
         FilledButton.icon(onPressed: _busy ? null : _add, icon: const Icon(Icons.add), label: const Text('Add event')),
         const SizedBox(height: 8),
         const SizedBox(height: 8),
-        Text(
-          'The "current" event is selected by default for everyone on Home, Attendance and Register. '
-          'Every event has its own Register form and Feedback form: share the links from the event.',
-          style: text.bodyMedium,
-        ),
         const SizedBox(height: 12),
         boot.when(
           loading: () => const Padding(

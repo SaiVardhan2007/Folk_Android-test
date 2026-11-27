@@ -7,9 +7,11 @@ import { sha256Hex, randomCode, signToken, verifyToken } from "./crypto";
 import { analytics } from "./analytics";
 import { sendOtpSms } from "./sms";
 import { attendanceAlert, defaultsOf, sendTemplate, welcomeMessage } from "./whatsapp";
+import { pushTo, DEVICE } from "./push";
 import { buildRows, guessMapping, IMPORT_FIELDS, ImportError, loadSheetCsv, MAX_IMPORT_BYTES, MAX_IMPORT_ROWS, parseCsv, type ImportField, type ImportRow, type Mapping } from "./importer";
 import { notFoundPage, pageHeaders, renderPage, type PageConfig } from "./publicPage";
-import { distribute, FOLLOW_UP, NOTE_REQUIRED, PENDING, POSITIVE, shuffle, STATUSES, takeFairly, type Coord } from "./calls";
+import { FOLLOW_UP, NOTE_REQUIRED, passes, PENDING, POSITIVE, shareOut, shuffle, STATUSES, type Attrs, type Member, type PoolFilter } from "./calls";
+import { findTitle, LIST_NAMES, LISTS, MULTI, sameKey, splitTitles, tidyTitle, type Guide, type ListName, type Opt, type Options } from "./options";
 import { CONTACT_TAGS, DEFAULT_TAGS, DONATIONS, NOT_INTERESTED, FEEDBACKS, GENDERS, LEVELS, OCCUPATIONS, STAYS, type Bindings, type Session, type Vars } from "./types";
 
 type Ctx = Context<{ Bindings: Bindings; Variables: Vars }>;
@@ -18,6 +20,7 @@ const app = new Hono<{ Bindings: Bindings; Variables: Vars }>();
 const TOKEN_TTL = 180 * 24 * 3600; // renewed each time the app opens, so active users are never signed out
 const PERSON = "FOLK Users";
 const ATT = "FOLK Attendance";
+const GUIDE = "FOLK Guide";
 const ASG = "FOLK Assignment";
 const LOG = "FOLK Call Log";
 const REG = "FOLK Registration";
@@ -64,23 +67,40 @@ const isDuplicate = (e: unknown) => e instanceof ErpError && (e.status === 409 |
 const erpOf = (c: Ctx) => new Erp(c.env);
 
 type Row = {
-  name: string; mob_no: string; full_name: string; gender?: string; level?: string; occupation?: string; profession?: string; pg_name?: string;
+  name: string; mob_no: string; full_name: string; gender?: string; level?: string; occupation?: string; pg?: string | null; pg_title?: string | null; dob?: string | null;
+  college?: string | null; college_title?: string | null; branch?: string | null; branch_title?: string | null;
   event_code?: string; user_tag?: string; is_active?: number; attendance_count?: number; last_attended_on?: string | null;
   registered_by?: string; reset_code_hash?: string; reset_code_expires?: string; reset_attempts?: number; creation?: string; registered_on?: string;
-  venue?: string; gmap_link?: string; call_no?: string; fg_name?: string; fg_mob_no?: string; folk_guide?: string;
-  age?: number; current_stay?: string; skills?: string; interests?: string; chanting_rounds?: number; feedback?: string; comments?: string;
+  venue?: string; guide?: string | null; guide_title?: string | null; guide_mobile?: string | null;
+  age?: number; current_stay?: string; chanting_rounds?: number; feedback?: string; comments?: string;
 };
-const PERSON_FIELDS = ["name", "mob_no", "full_name", "gender", "level", "occupation", "profession", "pg_name", "event_code", "user_tag", "is_active", "attendance_count", "last_attended_on", "registered_by", "creation", "venue", "gmap_link", "call_no", "fg_name", "fg_mob_no", "folk_guide", "registered_on", "age", "current_stay", "skills", "interests", "chanting_rounds", "feedback", "comments"];
+// College / Company and Branch are stored as IDs; their titles are read through the link ("college.title"), so a title edited in ERPNext shows everywhere at once.
+const PERSON_FIELDS = ["name", "mob_no", "full_name", "gender", "level", "occupation", "college", "college.title as college_title", "branch", "branch.title as branch_title", "pg", "pg.title as pg_title", "event_code", "user_tag", "is_active", "attendance_count", "last_attended_on", "registered_by", "creation", "venue", "guide", "guide.title as guide_title", "guide.mobile as guide_mobile", "registered_on", "age", "dob", "current_stay", "chanting_rounds", "feedback", "comments"];
 const AUTH_FIELDS = [...PERSON_FIELDS, "reset_code_hash", "reset_code_expires", "reset_attempts"];
 
-/** What the app is allowed to see about a person. Never includes any hash. */
-const publicPerson = (r: Row) => ({
+/** Skills and interests of a person (child tables), as {id, title}. */
+type Multi = { skills: Opt[]; interests: Opt[] };
+const NO_MULTI: Multi = { skills: [], interests: [] };
+
+/**
+ * What the app is allowed to see about a person. Never includes any hash.
+ * Dropdown values are sent twice: by ID (college_id, branch_id, skill_list/interest_list as [{id, title}]; used by the app from 1.0.8)
+ * and as text (profession, branch, skills, interests), which older app versions and every display use.
+ */
+const publicPerson = (r: Row, m: Multi = NO_MULTI) => ({
   id: r.name, mob: r.mob_no, name: r.full_name, gender: r.gender ?? "", level: r.level ?? "", occupation: r.occupation ?? "",
-  profession: r.profession ?? "", pg_name: r.pg_name ?? "", event_code: r.event_code ?? "", tag: r.user_tag || "Public",
+  profession: r.college_title ?? "", college_id: r.college ?? "", branch: r.branch_title ?? "", branch_id: r.branch ?? "",
+  skills: m.skills.map((o) => o.title).join(", "), skill_list: m.skills,
+  interests: m.interests.map((o) => o.title).join(", "), interest_list: m.interests,
+  pg_name: r.pg_title ?? "", pg_id: r.pg ?? "", event_code: r.event_code ?? "", tag: r.user_tag || "Public",
   is_active: r.is_active !== 0, attendance_count: r.attendance_count ?? 0, last_attended_on: r.last_attended_on ?? "",
   registered_by: r.registered_by ?? "", joined: (r.registered_on || r.creation || "").slice(0, 10),
-  venue: r.venue ?? "", gmap_link: r.gmap_link ?? "", call_no: r.call_no ?? "", fg_name: r.fg_name ?? "", fg_mob: r.fg_mob_no ?? "", folk_guide: r.folk_guide ?? "",
-  age: r.age ?? 0, current_stay: r.current_stay ?? "", skills: r.skills ?? "", interests: r.interests ?? "", chanting_rounds: r.chanting_rounds ?? 0,
+  venue: r.venue ?? "",
+  guide: (r.guide_title ?? "").toUpperCase(), guide_id: r.guide ?? "", guide_mobile: r.guide_mobile ?? "",
+  // The FOLK guide used to be typed per person; app 1.0.7 still reads these names.
+  folk_guide: (r.guide_title ?? "").toUpperCase(), fg_name: (r.guide_title ?? "").toUpperCase(), fg_mob: r.guide_mobile ?? "", call_no: "",
+  // Age is worked out from the date of birth; people entered before dates of birth were asked keep the age typed back then.
+  dob: r.dob ?? "", age: ageOn(r.dob, istToday()) ?? r.age ?? 0, current_stay: r.current_stay ?? "", chanting_rounds: r.chanting_rounds ?? 0,
   feedback: r.feedback ?? "", comments: r.comments ?? "",
 });
 
@@ -230,7 +250,11 @@ async function getRow(erp: Erp, mob: string): Promise<Row | null> {
   const rows = await erp.list<Row>(PERSON, AUTH_FIELDS, [["mob_no", "=", mob]], { limit_page_length: 1 });
   return rows[0] ?? null;
 }
-const getById = (erp: Erp, id: string) => erp.get<Row>(PERSON, id);
+/** By ID. A list query (not a document read) so the dropdown titles come with it. */
+async function getById(erp: Erp, id: string): Promise<Row | null> {
+  const rows = await erp.list<Row>(PERSON, AUTH_FIELDS, [["name", "=", id]], { limit_page_length: 1 });
+  return rows[0] ?? null;
+}
 /** Every role except the contact roles (Public, Not Interested) can use the app: Coordinator, Admin, and any role an admin adds. */
 const isStaffRow = (r: Row) => !CONTACT_TAGS.includes(r.user_tag || "Public");
 
@@ -241,16 +265,150 @@ async function body(c: Ctx): Promise<Record<string, unknown>> {
 function details(b: Record<string, unknown>) {
   return {
     gender: pick(b.gender, GENDERS), level: pick(b.level, LEVELS), occupation: pick(b.occupation, OCCUPATIONS),
-    profession: clean(b.profession), pg_name: clean(b.pg_name),
-    venue: clean(b.venue, 200), gmap_link: clean(b.gmap_link, 500), call_no: normalizeMobile(b.call_no) ?? "",
-    fg_name: clean(b.fg_name), fg_mob_no: normalizeMobile(b.fg_mob) ?? "",
+    venue: clean(b.venue, 200), dob: dateOfBirth(b.dob),
     // Numbers and flags are only included when sent, so an edit that leaves them out can never reset them.
     age: intIn(b.age, 1, 120), chanting_rounds: intIn(b.chanting_rounds, 0, 1000),
     current_stay: pick(b.current_stay, STAYS), feedback: pick(b.feedback, FEEDBACKS),
-    skills: clean(b.skills, 200), interests: clean(b.interests, 200), comments: clean(b.comments, 500),
+    comments: clean(b.comments, 500),
   };
 }
+
+// ---------- dropdown lists stored by ID (College / Company, Branch, Skill, Interest)
+async function loadOptions(c: Ctx): Promise<Options> {
+  return cached("options", 60_000, async () => {
+    const erp = erpOf(c);
+    const [all, guides] = await Promise.all([
+      Promise.all(LIST_NAMES.map((l) => erp.list<{ name: string; title: string }>(LISTS[l], ["name", "title"], [], { order_by: "title asc" }))),
+      erp.list<{ name: string; title: string; mobile?: string; is_default?: number }>(GUIDE, ["name", "title", "mobile", "is_default"], [], { order_by: "title asc" }),
+    ]);
+    const lists = Object.fromEntries(LIST_NAMES.map((l, i) => [l, all[i].map((r) => ({ id: r.name, title: r.title }))])) as Record<ListName, Opt[]>;
+    return { ...lists, guide: guides.map((g): Guide => ({ id: g.name, title: g.title.toUpperCase(), mobile: g.mobile ?? "", is_default: !!g.is_default })) };
+  });
+}
+const freshOptions = (c: Ctx) => { memo.delete("options"); return loadOptions(c); };
+
+/**
+ * The ID for a typed value: an existing value that differs only in case, spaces or punctuation is reused, otherwise it is added.
+ * "" for an empty value. Safe when two people add the same value at once (Title is unique in ERPNext).
+ */
+async function optionId(c: Ctx, list: ListName, raw: unknown): Promise<string> {
+  const title = tidyTitle(raw, list);
+  if (!sameKey(title)) return "";
+  const hit = findTitle((await loadOptions(c))[list], title) ?? findTitle((await freshOptions(c))[list], title);
+  if (hit) return hit.id;
+  try {
+    const r = await erpOf(c).insert<{ name: string }>(LISTS[list], { title });
+    memo.delete("options");
+    return r.data.name;
+  } catch (e) {
+    if (!isDuplicate(e)) throw e;
+    const again = findTitle((await freshOptions(c))[list], title); // someone added it a moment ago
+    if (again) return again.id;
+    throw e;
+  }
+}
+
+/**
+ * FOLK Guide from a request: an ID from the list (app 1.0.8+), or a name that is already in the list (older apps, imports).
+ * Guides are added only in ERPNext, so an unknown name is ignored. New people get the default guide from ERPNext.
+ */
+async function guideField(c: Ctx, b: Record<string, unknown>): Promise<Record<string, unknown>> {
+  const guides = (await loadOptions(c)).guide;
+  if (typeof b.guide_id === "string" && b.guide_id) {
+    if (!guides.some((g) => g.id === b.guide_id)) throw bad("That FOLK guide was removed from the list. Please pick again.");
+    return { guide: b.guide_id };
+  }
+  const named = typeof b.folk_guide === "string" ? b.folk_guide : typeof b.fg_name === "string" ? b.fg_name : "";
+  const hit = named ? findTitle(guides, named) : undefined;
+  return hit ? { guide: hit.id } : {};
+}
+const guideOf = async (c: Ctx, id: string | null | undefined): Promise<Guide | undefined> => (id ? (await loadOptions(c)).guide.find((g) => g.id === id) : undefined);
+
+/** The value people pick on the public form when their college / company is not in the list. */
+const OTHERS = "Others";
+
+/**
+ * College / Company from the public form. People there can only pick an existing value or "Others" (they never add values;
+ * only app users can). A name typed on an older copy of the page is used only when it is already in the list, else "Others".
+ */
+async function publicCollege(c: Ctx, b: Record<string, unknown>): Promise<string> {
+  const id = clean(b.college_id, 40);
+  if (id && id !== "other") return knownId(c, "college", id);
+  const typed = tidyTitle(b.profession, "college");
+  if (!id && !sameKey(typed)) return "";
+  const hit = typed ? findTitle((await loadOptions(c)).college, typed) : undefined;
+  return hit ? hit.id : optionId(c, "college", OTHERS);
+}
+
+/** An ID sent by the app must exist in that list. */
+async function knownId(c: Ctx, list: ListName, raw: unknown): Promise<string> {
+  const id = clean(raw, 40);
+  if (!id) return "";
+  const has = (o: Options) => o[list].some((x) => x.id === id);
+  if (has(await loadOptions(c)) || has(await freshOptions(c))) return id;
+  throw bad("A value you picked was removed from the list. Please pick it again.");
+}
+
+/**
+ * The dropdown fields of a person from a request. The app sends IDs (college_id, branch_id, skill_ids, interest_ids);
+ * older app versions, the public form and imports send text (profession, branch, skills, interests), which is matched or added.
+ * A field that is not sent is left out (never changed). An empty value clears the field only when `clear` is true.
+ */
+async function listFields(c: Ctx, b: Record<string, unknown>, clear: boolean): Promise<Record<string, unknown>> {
+  const out: Record<string, unknown> = {};
+  const one = async (field: "college" | "branch" | "pg", idKey: string, textKey: string) => {
+    const id = typeof b[idKey] === "string" ? await knownId(c, field, b[idKey]) : typeof b[textKey] === "string" ? await optionId(c, field, b[textKey]) : undefined;
+    if (id === undefined || (!id && !clear)) return;
+    out[field] = id || null;
+  };
+  const many = async (list: "skill" | "interest", idKey: string, textKey: string) => {
+    let ids: string[] | undefined;
+    if (Array.isArray(b[idKey])) ids = await Promise.all((b[idKey] as unknown[]).slice(0, 30).map((v) => knownId(c, list, v)));
+    else if (typeof b[textKey] === "string") ids = await Promise.all(splitTitles(b[textKey]).slice(0, 30).map((t) => optionId(c, list, t)));
+    if (ids === undefined) return;
+    const unique = [...new Set(ids.filter(Boolean))];
+    if (!unique.length && !clear) return;
+    out[MULTI[list].field] = unique.map((id) => ({ [MULTI[list].link]: id }));
+  };
+  await Promise.all([one("college", "college_id", "profession"), one("branch", "branch_id", "branch"), one("pg", "pg_id", "pg_name"), many("skill", "skill_ids", "skills"), many("interest", "interest_ids", "interests")]);
+  return { ...out, ...(await guideField(c, b)) };
+}
+
+/** Skills and interests for these people, read from the child tables in one query each. */
+async function loadMulti(erp: Erp, ids: string[]): Promise<Map<string, Multi>> {
+  const out = new Map<string, Multi>();
+  if (!ids.length) return out;
+  const rows = (list: "skill" | "interest") => {
+    const { child, link } = MULTI[list];
+    const fields = ["parent", `${link} as id`, `${link}.title as title`];
+    const q = (f: Filters) => erp.list<{ parent: string; id: string; title: string }>(child, fields, f, { parent: PERSON, order_by: "idx asc" });
+    // Many people (an export): one query for everybody is cheaper than many "parent in (...)" queries.
+    return ids.length > 300 ? q([["parenttype", "=", PERSON]]) : Promise.all(chunk(ids, 100).map((ch) => q([["parent", "in", ch]]))).then((r) => r.flat());
+  };
+  const [skills, interests] = await Promise.all([rows("skill"), rows("interest")]);
+  const of = (id: string) => out.get(id) ?? out.set(id, { skills: [], interests: [] }).get(id)!;
+  for (const r of skills) of(r.parent).skills.push({ id: r.id, title: r.title });
+  for (const r of interests) of(r.parent).interests.push({ id: r.id, title: r.title });
+  return out;
+}
+/** People as the app sees them, with their skills and interests. */
+async function present(erp: Erp, rows: Row[]) {
+  const m = await loadMulti(erp, rows.map((r) => r.name));
+  return rows.map((r) => publicPerson(r, m.get(r.name)));
+}
 /** A whole number inside [min, max], or undefined (so the field is left alone). */
+/** A date of birth "YYYY-MM-DD" between 1900 and today, else undefined (not sent / not valid). */
+function dateOfBirth(v: unknown): string | undefined {
+  if (typeof v !== "string" || !DATE_RE.test(v)) return undefined;
+  return v >= "1900-01-01" && v <= istToday() ? v : undefined;
+}
+/** Whole years from [dob] to [today] (both "YYYY-MM-DD"). */
+function ageOn(dob: string | null | undefined, today: string): number | undefined {
+  if (!dob || !DATE_RE.test(dob)) return undefined;
+  const y = Number(today.slice(0, 4)) - Number(dob.slice(0, 4));
+  return today.slice(5) < dob.slice(5) ? y - 1 : y;
+}
+
 function intIn(v: unknown, min: number, max: number): number | undefined {
   if (v === null || v === "" || v === undefined) return undefined;
   const n = Math.floor(Number(v));
@@ -276,7 +434,7 @@ app.post("/auth/signup", async (c) => {
     return reply();
   }
   if (!name) throw bad("Enter your name.");
-  const doc = { mob_no: mob, full_name: name, ...details(b), user_tag: "Coordinator", is_active: approved ? 1 : 0, registered_by: "self sign-up", registered_on: istToday() };
+  const doc = { mob_no: mob, full_name: name, ...details(b), ...(await listFields(c, b, false)), user_tag: "Coordinator", is_active: approved ? 1 : 0, registered_by: "self sign-up", registered_on: istToday() };
   try {
     await erp.insert<Row>(PERSON, doc);
   } catch (e) {
@@ -369,7 +527,7 @@ const isStaff = (s: Session) => s.tag === "Admin" || s.tag === "Coordinator";
 const needAdmin = (c: Ctx) => { if (!isAdmin(c.get("session"))) throw new HttpError(403, "Admin access required."); };
 const needStaff = (c: Ctx) => { if (!isStaff(c.get("session"))) throw new HttpError(403, "Not allowed."); };
 
-for (const p of ["/me", "/bootstrap", "/events", "/home", "/people", "/people/*", "/attendance", "/attendance/*", "/my/*", "/print/jobs", "/registrations", "/admin/*", "/reports/*"]) app.use(p, requireSession);
+for (const p of ["/me", "/bootstrap", "/options", "/options/*", "/events", "/home", "/people", "/people/*", "/attendance", "/attendance/*", "/my/*", "/print/jobs", "/print/status", "/registrations", "/admin/*", "/reports/*"]) app.use(p, requireSession);
 
 // ---------- app update notice (public: a phone must learn it is out of date even before sign-in)
 /** Phones are given OUR address for the APK (not the host's own link), so the Update button never opens another app such as GitHub's, which asks to sign in. */
@@ -432,17 +590,28 @@ app.get("/bootstrap", async (c) => {
 });
 app.get("/events", async (c) => c.json(splitEvents(await loadEvents(c))));
 
+/** Every dropdown list ({college, branch, skill, interest}: [{id, title}]) for the person forms. */
+app.get("/options", async (c) => {
+  needStaff(c);
+  return c.json(await loadOptions(c));
+});
+/** The small "Add" next to a dropdown: adds a value (or returns the existing one if it differs only in case/spacing). */
+app.post("/options/:list", async (c) => {
+  needStaff(c);
+  const list = pick(c.req.param("list"), LIST_NAMES);
+  if (!list) throw new HttpError(404, "Unknown list.");
+  const id = await optionId(c, list, (await body(c)).title);
+  if (!id) throw bad("Type a value first.");
+  const o = (await loadOptions(c))[list].find((x) => x.id === id);
+  return c.json({ id, title: o?.title ?? "" }, 201);
+});
+
 app.get("/home", async (c) => {
   const event = clean(c.req.query("event"), 60);
   if (!event) throw bad("event is required");
   const date = istToday();
   const data = await cached(`home:${event}:${date}`, 5_000, async () => {
-    const erp = erpOf(c);
-    const [registered, marked] = await Promise.all([
-      erp.count(PERSON, [["event_code", "=", event]]),
-      erp.count(ATT, [["event_code", "=", event], ["attendance_date", "=", date]]),
-    ]);
-    return { registered, marked_today: marked };
+    return { registered: await erpOf(c).count(PERSON, [["event_code", "=", event]]) };
   });
   return c.json({ ...data, date });
 });
@@ -456,14 +625,15 @@ app.get("/people/search", async (c) => {
   const numeric = /^[\d\s+\-]+$/.test(q);
   const filters: Filters = numeric ? [["mob_no", "like", `${digits.slice(-10)}%`]] : [["full_name", "like", `%${q.replace(/[%_]/g, "")}%`]];
   const rows = await erp.list<Row>(PERSON, PERSON_FIELDS, filters, { limit_page_length: 8, order_by: "full_name asc" });
-  return c.json({ people: rows.map(publicPerson) });
+  return c.json({ people: await present(erp, rows) });
 });
 
 app.get("/people/:mob", async (c) => {
   const mob = normalizeMobile(c.req.param("mob"));
   if (!mob) throw bad("Enter a valid 10-digit mobile number.");
-  const r = await getRow(erpOf(c), mob);
-  return c.json({ person: r ? publicPerson(r) : null });
+  const erp = erpOf(c);
+  const r = await getRow(erp, mob);
+  return c.json({ person: r ? (await present(erp, [r]))[0] : null });
 });
 
 app.post("/people", async (c) => {
@@ -475,11 +645,13 @@ app.post("/people", async (c) => {
   if (!name) throw bad("Enter the name.");
   const d = details(b);
   if (!d.level) throw bad("Choose a level.");
-  const doc = { mob_no: mob, full_name: name, ...d, event_code: clean(b.event_code, 60) || undefined, user_tag: "Public", is_active: 1, registered_by: s.name, registered_on: istToday() };
+  const doc = { mob_no: mob, full_name: name, ...d, ...(await listFields(c, b, false)), event_code: clean(b.event_code, 60) || undefined, user_tag: "Public", is_active: 1, registered_by: s.name, registered_on: istToday() };
   try {
-    const r = await erpOf(c).insert<Row>(PERSON, doc);
+    const erp = erpOf(c);
+    const r = await erp.insert<Row>(PERSON, doc);
     c.executionCtx.waitUntil(notifyNewContact(c, r.data).catch((e) => console.error("whatsapp", e)));
-    return c.json({ person: publicPerson(r.data) }, 201);
+    const saved = await getById(erp, r.data.name); // re-read for the dropdown titles
+    return c.json({ person: (await present(erp, [saved ?? r.data]))[0] }, 201);
   } catch (e) {
     if (isDuplicate(e)) throw new HttpError(409, "This mobile number is already registered.");
     throw e;
@@ -490,7 +662,7 @@ app.put("/people/:mob", async (c) => {
   const mob = normalizeMobile(c.req.param("mob"));
   if (!mob) throw bad("Enter a valid 10-digit mobile number.");
   const b = await body(c);
-  const patch: Record<string, unknown> = { ...details(b) };
+  const patch: Record<string, unknown> = { ...details(b), ...(await listFields(c, b, false)) };
   if (clean(b.name)) patch.full_name = clean(b.name);
   const erp = erpOf(c);
   const row = await getRow(erp, mob);
@@ -536,13 +708,13 @@ app.post("/attendance", async (c) => {
     const name = clean(b.name);
     const d = details(b);
     if (!name || !d.level) throw new HttpError(404, "This number is not registered. Add the name and level to register them.", { not_registered: true });
-    const doc = { mob_no: mob, full_name: name, ...d, event_code: event, user_tag: "Public", is_active: 1, registered_by: s.name, registered_on: istToday() };
+    const doc = { mob_no: mob, full_name: name, ...d, ...(await listFields(c, b, false)), event_code: event, user_tag: "Public", is_active: 1, registered_by: s.name, registered_on: istToday() };
     try { person = (await erp.insert<Row>(PERSON, doc)).data; c.executionCtx.waitUntil(notifyNewContact(c, person).catch((e) => console.error("whatsapp", e))); } catch (e) { if (!isDuplicate(e)) throw e; person = await getRow(erp, mob); }
     registered = true;
   } else if (b.edits && typeof b.edits === "object") {
     // Volunteer corrected the details on screen: save them first.
     const e = b.edits as Record<string, unknown>;
-    const patch: Record<string, unknown> = { ...details(e) };
+    const patch: Record<string, unknown> = { ...details(e), ...(await listFields(c, e, false)) };
     if (clean(e.name)) patch.full_name = clean(e.name);
     const changes = nonEmpty(patch);
     if (Object.keys(changes).length) await erp.update(PERSON, person.name, changes);
@@ -564,7 +736,8 @@ app.post("/attendance", async (c) => {
     c.executionCtx.waitUntil(notifyCoordinators(c, personId, event, ts).catch((e) => console.error("notifyCoordinators", e)));
   }
   memo.delete(`home:${event}:${date}`);
-  return c.json({ status, id, registered, name: person.full_name });
+  const guide = await guideOf(c, person.guide); // printed on the receipt
+  return c.json({ status, id, registered, name: person.full_name, guide: guide?.title ?? "", guide_mobile: guide?.mobile ?? "" });
 });
 
 app.get("/attendance/today", async (c) => {
@@ -630,10 +803,11 @@ app.get("/admin/people", async (c) => {
   ]);
   // How many calls have been made to each person on this page (the "Calls" button; the list itself opens from /people/:mob/history).
   const ids = rows.map((r) => r.name);
+  const multi = await loadMulti(erp, ids);
   const callCounts = new Map((await Promise.all(chunk(ids, 100).map((ch) => erp.list<{ person: string; n: number }>(LOG, aggregate({ COUNT: "*", as: "n" }, "person"), [["person", "in", ch]], { group_by: "person" })))).flat().map((x) => [x.person, x.n]));
   return c.json({
     page: q.page, page_size: PAGE_SIZE, total: tot[0]?.total ?? rows.length,
-    people: rows.map((r) => ({ ...publicPerson(r), calls_count: callCounts.get(r.name) ?? 0 })),
+    people: rows.map((r) => ({ ...publicPerson(r, multi.get(r.name)), calls_count: callCounts.get(r.name) ?? 0 })),
   });
 });
 
@@ -652,14 +826,10 @@ app.put("/admin/people/:mob", async (c) => {
   const choice = (key: string, allowed: readonly string[]) => { if (typeof b[key] === "string") patch[key] = pick(b[key], allowed); };
   const whole = (key: string, min: number, max: number) => { if (b[key] !== undefined) patch[key] = intIn(b[key], min, max) ?? 0; };
   if (typeof b.name === "string") { if (!clean(b.name)) throw bad("Enter the name."); patch.full_name = clean(b.name); }
-  text("profession", "profession"); text("pg_name", "pg_name"); text("venue", "venue", 200); text("gmap_link", "gmap_link", 500);
-  text("fg_name", "fg_name"); text("folk_guide", "folk_guide", 40); text("skills", "skills", 200); text("interests", "interests", 200); text("comments", "comments", 500);
-  for (const [key, field] of [["call_no", "call_no"], ["fg_mob", "fg_mob_no"]] as const) {
-    if (typeof b[key] !== "string") continue;
-    const v = clean(b[key], 20);
-    if (v && !normalizeMobile(v)) throw bad("Enter a valid 10-digit mobile number.");
-    patch[field] = v ? normalizeMobile(v) : "";
-  }
+  Object.assign(patch, await listFields(c, b, true));
+  text("venue", "venue", 200);
+  if (typeof b.dob === "string") { const d = dateOfBirth(b.dob); if (b.dob && !d) throw bad("Enter a valid date of birth."); patch.dob = d ?? null; }
+  text("comments", "comments", 500);
   choice("gender", GENDERS); choice("level", LEVELS); choice("occupation", OCCUPATIONS); choice("current_stay", STAYS); choice("feedback", FEEDBACKS);
   whole("age", 1, 120); whole("chanting_rounds", 0, 1000);
   if (b.new_mob !== undefined && normalizeMobile(b.new_mob) !== mob) {
@@ -676,6 +846,12 @@ app.put("/admin/people/:mob", async (c) => {
   return c.json({ ok: true });
 });
 
+/** Takes a contact off every coordinator's list straight away. Calls already made (and their history) are kept. */
+async function dropOpenCalls(erp: Erp, person: string) {
+  const open = await erp.list<{ name: string }>(ASG, ["name"], [["person", "=", person], ["status", "=", PENDING]], { limit_page_length: 0 });
+  if (open.length) await erp.call("POST", "/api/method/frappe.desk.reportview.delete_items", { items: JSON.stringify(open.map((x) => x.name)), doctype: ASG });
+}
+
 app.patch("/admin/people/:mob/role", async (c) => {
   needAdmin(c);
   const s = c.get("session");
@@ -691,11 +867,7 @@ app.patch("/admin/people/:mob/role", async (c) => {
   if (!row) throw new HttpError(404, "Person not found.");
   await erp.update(PERSON, row.name, { user_tag: tag });
   memo.delete(`p:${row.name}`);
-  if (tag === NOT_INTERESTED) {
-    // Take them off every coordinator's list straight away. Calls already made (and their history) are kept.
-    const open = await erp.list<{ name: string }>(ASG, ["name"], [["person", "=", row.name], ["status", "=", PENDING]], { limit_page_length: 0 });
-    if (open.length) await erp.call("POST", "/api/method/frappe.desk.reportview.delete_items", { items: JSON.stringify(open.map((x) => x.name)), doctype: ASG });
-  }
+  if (tag === NOT_INTERESTED) await dropOpenCalls(erp, row.name);
   return c.json({ ok: true });
 });
 
@@ -799,9 +971,15 @@ const csvResponse = (c: Ctx, name: string, text: string) =>
 app.get("/admin/export/people", async (c) => {
   needAdmin(c);
   const q = peopleQuery(c.req.query());
-  const rows = await erpOf(c).list<Row>(PERSON, PERSON_FIELDS, q.filters, { ...(q.or_filters && { or_filters: q.or_filters }), order_by: q.order_by, limit_page_length: 0 });
+  const erp = erpOf(c);
+  const rows = await erp.list<Row>(PERSON, PERSON_FIELDS, q.filters, { ...(q.or_filters && { or_filters: q.or_filters }), order_by: q.order_by, limit_page_length: 0 });
+  const multi = await loadMulti(erp, rows.map((r) => r.name));
+  const out = rows.map((r) => {
+    const m = multi.get(r.name) ?? NO_MULTI;
+    return { ...r, college: r.college_title ?? "", branch: r.branch_title ?? "", pg_name: r.pg_title ?? "", age: ageOn(r.dob, istToday()) ?? r.age ?? "", guide: (r.guide_title ?? "").toUpperCase(), skills: m.skills.map((o) => o.title).join(", "), interests: m.interests.map((o) => o.title).join(", ") };
+  });
   return csvResponse(c, "folk-people.csv", csv(
-    ["mob_no", "full_name", "gender", "level", "occupation", "profession", "pg_name", "venue", "gmap_link", "call_no", "fg_name", "fg_mob_no", "event_code", "user_tag", "attendance_count", "last_attended_on", "registered_by", "registered_on", "age", "current_stay", "skills", "interests", "chanting_rounds", "feedback", "comments"], rows));
+    ["mob_no", "full_name", "gender", "level", "occupation", "college", "branch", "pg_name", "venue", "guide", "guide_mobile", "event_code", "user_tag", "attendance_count", "last_attended_on", "registered_by", "registered_on", "dob", "age", "current_stay", "skills", "interests", "chanting_rounds", "feedback", "comments"], out));
 });
 
 app.get("/reports/attendance", async (c) => {
@@ -849,12 +1027,14 @@ app.put("/admin/settings", async (c) => {
 });
 
 // ---------- WhatsApp: welcome message to the contact (sent in the background, never blocks the app)
+/** A person just inserted has only the guide's ID: add the guide's phone (sent in the welcome message). */
+const withGuideMobile = async (c: Ctx, p: Row): Promise<Row> => (p.guide_mobile ? p : { ...p, guide_mobile: (await guideOf(c, p.guide))?.mobile ?? "" });
 /** Welcomes a contact who was just created or registered for an event. `eventCode` defaults to the event they were created under. */
 async function notifyNewContact(c: Ctx, p: Row, eventCode = p.event_code) {
   const s = await loadSettings(c);
   if (!s.whatsapp_enabled) return;
   const events = await loadEvents(c);
-  const m = welcomeMessage(p, events.find((e) => e.code === eventCode)?.name ?? "", s.welcome_template, defaultsOf(c.env));
+  const m = welcomeMessage(await withGuideMobile(c, p), events.find((e) => e.code === eventCode)?.name ?? "", s.welcome_template, defaultsOf(c.env));
   if (m) await sendTemplate(c.env, m);
 }
 
@@ -866,7 +1046,7 @@ app.get("/admin/whatsapp/preview/:mob", async (c) => {
   if (!row) throw new HttpError(404, "Person not found.");
   const events = await loadEvents(c);
   const s = await loadSettings(c);
-  const m = welcomeMessage(row, events.find((e) => e.code === row.event_code)?.name ?? "", s.welcome_template, defaultsOf(c.env));
+  const m = welcomeMessage(await withGuideMobile(c, row), events.find((e) => e.code === row.event_code)?.name ?? "", s.welcome_template, defaultsOf(c.env));
   return c.json({ messages: m ? [m] : [] });
 });
 
@@ -916,9 +1096,9 @@ app.get("/my/calls", async (c) => {
   const rows = await erp.list<Asg>(ASG, ASG_FIELDS, [["coordinator", "=", s.id]], { order_by: "assigned_at desc", limit_page_length: 1000 });
   const ids = [...new Set(rows.map((r) => r.person))];
   const since = new Date(Date.now() + 5.5 * 3600_000 - 28 * 86400_000).toISOString().replace("T", " ").slice(0, 19);
-  type PInfo = { name: string; level?: string; venue?: string; gmap_link?: string; pg_name?: string; profession?: string; attendance_count?: number; last_attended_on?: string };
+  type PInfo = { name: string; level?: string; venue?: string; pg_name?: string; profession?: string; attendance_count?: number; last_attended_on?: string };
   const [people, counts, events, templates] = await Promise.all([
-    Promise.all(chunk(ids, 100).map((ch) => erp.list<PInfo>(PERSON, ["name", "level", "venue", "gmap_link", "pg_name", "profession", "attendance_count", "last_attended_on"], [["name", "in", ch]]))),
+    Promise.all(chunk(ids, 100).map((ch) => erp.list<PInfo>(PERSON, ["name", "level", "venue", "pg.title as pg_name", "college.title as profession", "attendance_count", "last_attended_on"], [["name", "in", ch]]))),
     Promise.all(chunk(ids, 100).map((ch) => erp.list<{ person: string; n: number }>(LOG, aggregate({ COUNT: "*", as: "n" }, "person"), [["person", "in", ch], ["called_at", ">=", since]], { group_by: "person" }))),
     loadEvents(c), loadTemplates(c),
   ]);
@@ -930,7 +1110,7 @@ app.get("/my/calls", async (c) => {
     return {
       id: r.name, mob: r.person_mob, name: r.person_name, event_code: r.event_code, event_name: evName.get(r.event_code) ?? r.event_code,
       status: r.status || PENDING, note: r.note ?? "", is_follow_up: !!r.is_follow_up, assigned_at: r.assigned_at ?? "", submitted_at: r.submitted_at ?? "",
-      level: p?.level ?? "", venue: p?.venue ?? "", gmap_link: p?.gmap_link ?? "", pg_name: p?.pg_name ?? "", profession: p?.profession ?? "",
+      level: p?.level ?? "", venue: p?.venue ?? "", pg_name: p?.pg_name ?? "", profession: p?.profession ?? "",
       sessions: p?.attendance_count ?? 0, last_attended_on: p?.last_attended_on ?? "", calls_28d: calls.get(r.person) ?? 0,
     };
   });
@@ -955,6 +1135,38 @@ app.get("/my/calls/summary", async (c) => {
   return c.json({ called: calls.length, came: calls.filter((x) => x.came).length, calls });
 });
 
+/**
+ * Calling progress for an event: for every coordinator who was given contacts, how many calls are done and how many are still waiting.
+ * Staff only; it returns names and counts, never phone numbers. A weekly event counts only this Monday-Sunday (plus everything still waiting).
+ */
+app.get("/calls/progress", async (c) => {
+  staffOnly(c);
+  const event = clean(c.req.query("event"), 60);
+  if (!event) throw bad("event is required");
+  const erp = erpOf(c);
+  const weekly = !!(await loadEvents(c)).find((e) => e.code === event)?.weekly;
+  type N = { coordinator: string; status: string; n: number };
+  const count = (f: Filters) => erp.list<N>(ASG, aggregate({ COUNT: "*", as: "n" }, "coordinator", "status"), [["event_code", "=", event], ...f], { group_by: "coordinator, status" });
+  const [rows, names] = await Promise.all([
+    weekly
+      ? Promise.all([count([["status", "=", PENDING]]), count([["status", "!=", PENDING], ["submitted_at", ">=", `${istWeek().from} 00:00:00`]])]).then((p) => p.flat())
+      : count([]),
+    erp.list<{ name: string; full_name: string }>(PERSON, ["name", "full_name"], [["user_tag", "in", ["Coordinator", "Admin"]]]),
+  ]);
+  const nm = new Map(names.map((x) => [x.name, x.full_name]));
+  const by = new Map<string, { id: string; name: string; done: number; pending: number }>();
+  for (const r of rows) {
+    const x = by.get(r.coordinator) ?? { id: r.coordinator, name: nm.get(r.coordinator) ?? "Earlier system (imported)", done: 0, pending: 0 };
+    if (r.status === PENDING) x.pending += r.n; else x.done += r.n;
+    by.set(r.coordinator, x);
+  }
+  const pct = (done: number, total: number) => (total ? Math.round((done / total) * 100) : 0);
+  const coordinators = [...by.values()].map((x) => ({ ...x, assigned: x.done + x.pending, percent: pct(x.done, x.done + x.pending), complete: x.pending === 0 }))
+    .sort((a, b) => b.percent - a.percent || b.done - a.done || a.name.localeCompare(b.name));
+  const done = coordinators.reduce((t, x) => t + x.done, 0), pending = coordinators.reduce((t, x) => t + x.pending, 0);
+  return c.json({ totals: { assigned: done + pending, done, pending, percent: pct(done, done + pending) }, coordinators });
+});
+
 /** One call outcome. Safe to retry: client_ref is unique, so the log can never get a second row for the same tap. */
 app.post("/my/calls/:id/submit", async (c) => {
   staffOnly(c);
@@ -977,7 +1189,19 @@ app.post("/my/calls/:id/submit", async (c) => {
     if (!isDuplicate(e)) throw e; // already saved by an earlier attempt
   }
   await erp.update(ASG, a.name, { status, note, submitted_at: now });
-  return c.json({ ok: true, status, submitted_at: now });
+  let marked = false;
+  if (status === NOT_INTERESTED) {
+    // The contact said no: move them to the "Not Interested" role so nobody is asked to call them again.
+    // Only plain contacts change; a coordinator or admin who was assigned by mistake keeps their role.
+    const p = await erp.get<{ name: string; user_tag?: string }>(PERSON, a.person);
+    if (p && (p.user_tag || "Public") === "Public") {
+      await erp.update(PERSON, p.name, { user_tag: NOT_INTERESTED });
+      memo.delete(`p:${p.name}`);
+      await dropOpenCalls(erp, p.name);
+      marked = true;
+    }
+  }
+  return c.json({ ok: true, status, submitted_at: now, marked_not_interested: marked });
 });
 
 /** Earlier calls and attended sessions for a contact (the popups on a call card). */
@@ -1000,7 +1224,7 @@ app.get("/admin/callers", async (c) => {
   const erp = erpOf(c);
   const event = clean(c.req.query("event"), 60); // counts are for this event; without it, for all events
   const [people, counts] = await Promise.all([
-    erp.list<Row & { call_limit?: number; auto_assign?: number }>(PERSON, ["name", "mob_no", "full_name", "call_limit", "auto_assign"], [["user_tag", "=", "Coordinator"], ["is_active", "=", 1]], { order_by: "full_name asc" }),
+    erp.list<Row & { call_limit?: number; auto_assign?: number }>(PERSON, ["name", "mob_no", "full_name", "gender", "call_limit", "auto_assign"], [["user_tag", "=", "Coordinator"], ["is_active", "=", 1]], { order_by: "full_name asc" }),
     erp.list<{ coordinator: string; status: string; n: number }>(ASG, aggregate({ COUNT: "*", as: "n" }, "coordinator", "status"), event ? [["event_code", "=", event]] : [], { group_by: "coordinator, status" }),
   ]);
   const by = new Map<string, { assigned: number; pending: number; positive: number }>();
@@ -1013,7 +1237,7 @@ app.get("/admin/callers", async (c) => {
   }
   return c.json({
     statuses: STATUSES.filter((x) => x !== PENDING),
-    callers: people.map((p) => ({ id: p.name, mob: p.mob_no, name: p.full_name, call_limit: p.call_limit || null, auto_assign: !!p.auto_assign, ...(by.get(p.name) ?? { assigned: 0, pending: 0, positive: 0 }) })),
+    callers: people.map((p) => ({ id: p.name, mob: p.mob_no, name: p.full_name, gender: p.gender ?? "", call_limit: p.call_limit || null, auto_assign: !!p.auto_assign, ...(by.get(p.name) ?? { assigned: 0, pending: 0, positive: 0 }) })),
   });
 });
 
@@ -1035,31 +1259,53 @@ app.patch("/admin/callers/:mob", async (c) => {
   return c.json({ ok: true });
 });
 
-// ---------- admin: assigning contacts
+// ---------- admin: assigning contacts (wizard)
 //
 // Three kinds of hand-out, all built the same way: (1) PLAN: the server works out exactly who gets which contact and returns it,
 // without writing anything; (2) APPLY: the app sends that plan back in small batches. Each batch is safe to repeat, so a dropped
-// connection never leaves a half-done mess: the app shows how far it got and carries on from there.
-//   new      contacts nobody has been assigned to yet (for this event)
-//   others   contacts not called yet, taken from other coordinators (for example to give a new coordinator a share)
+// connection never leaves a half-done mess; (3) RELEASE (assign only): removes the earlier untouched calls the new plan no longer uses.
+//   assign   every active contact; the earlier hand-out for this event is replaced, called or not (call logs are never touched)
 //   followup contacts whose last call had one of the chosen statuses (optionally within a date range), for another try
-type Scope = "new" | "others" | "followup";
+//   move     untouched calls of chosen coordinators (or of everyone when `all`) go to other coordinators
+type Kind = "assign" | "followup" | "move";
+type GroupIn = { filters: PoolFilter[]; keep_previous: boolean; leave: boolean; coordinators: { mob: string; min: number; max: number }[] };
 type AssignBody = {
-  event: string; scope: Scope; mode: "previous" | "random"; level: string; gender: string; attended: string; reg_event: string;
-  mobs: string[]; coordinators: string[]; from: string[]; statuses: string[]; date_from: string; date_to: string; limit: number;
+  kind: Kind; event: string; filters: PoolFilter[]; statuses: string[]; date_from: string; date_to: string; from: string[]; include_new: boolean; all: boolean;
+  groups: GroupIn[]; rest: GroupIn;
 };
+/** The fields a hand-out can be narrowed by. Fixed here so the app can never ask for anything else. */
+const POOL_FIELDS = ["college", "branch", "level", "gender", "occupation", "guide", "reg_event", "attended", "skill", "interest"] as const;
 const arr = (v: unknown, max = 5000) => (Array.isArray(v) ? v.map((x) => String(x)).slice(0, max) : []);
-function assignBody(b: Record<string, unknown>): AssignBody {
-  const scope = (["new", "others", "followup"] as const).find((x) => x === b.scope);
-  if (!scope) throw bad("Choose what you want to assign.");
-  const date = (v: unknown) => (DATE_RE.test(String(v ?? "")) ? String(v) : "");
-  const limit = Math.floor(Number(b.limit));
+const whole = (v: unknown) => { const n = Math.floor(Number(v)); return Number.isFinite(n) && n > 0 ? Math.min(n, 100000) : 0; };
+const rec = (v: unknown): Record<string, unknown> => (v && typeof v === "object" ? (v as Record<string, unknown>) : {});
+
+function parseFilters(v: unknown): PoolFilter[] {
+  return (Array.isArray(v) ? v : []).slice(0, 20).flatMap((x) => {
+    const f = rec(x);
+    const field = (POOL_FIELDS as readonly string[]).find((n) => n === f.field);
+    return field ? [{ field, mode: f.mode === "except" ? "except" as const : "only" as const, values: arr(f.values, 2000) }] : [];
+  });
+}
+function parseGroup(v: unknown): GroupIn {
+  const g = rec(v);
   return {
-    event: clean(b.event, 60), scope, mode: b.mode === "previous" ? "previous" : "random",
-    level: pick(b.level, LEVELS), gender: pick(b.gender, GENDERS), attended: clean(b.attended, 5), reg_event: clean(b.reg_event, 60),
-    mobs: arr(b.mobs).map((m) => normalizeMobile(m) ?? "").filter(Boolean), coordinators: arr(b.coordinators, 200), from: arr(b.from, 200),
+    filters: parseFilters(g.filters), keep_previous: g.keep_previous === true, leave: g.leave === true,
+    coordinators: (Array.isArray(g.coordinators) ? g.coordinators : []).slice(0, 200).map((x) => {
+      const m = rec(x);
+      return { mob: normalizeMobile(m.mob) ?? "", min: whole(m.min), max: whole(m.max) };
+    }).filter((m) => m.mob),
+  };
+}
+function assignBody(b: Record<string, unknown>): AssignBody {
+  const kind = (["assign", "followup", "move"] as const).find((x) => x === b.kind);
+  if (!kind) throw bad("Choose what you want to do.");
+  const date = (v: unknown) => (DATE_RE.test(String(v ?? "")) ? String(v) : "");
+  return {
+    kind, event: clean(b.event, 60), filters: parseFilters(b.filters),
     statuses: arr(b.statuses, 20).filter((x) => (STATUSES as readonly string[]).includes(x) && x !== PENDING),
-    date_from: date(b.date_from), date_to: date(b.date_to), limit: Number.isFinite(limit) && limit > 0 ? Math.min(limit, 5000) : 0,
+    date_from: date(b.date_from), date_to: date(b.date_to),
+    from: arr(b.from, 200).map((m) => normalizeMobile(m) ?? "").filter(Boolean), include_new: b.include_new === true, all: b.all === true,
+    groups: (Array.isArray(b.groups) ? b.groups : []).slice(0, 30).map(parseGroup), rest: parseGroup(b.rest),
   };
 }
 
@@ -1076,97 +1322,191 @@ async function bulkUpdate(erp: Erp, doctype: string, rows: ({ name: string } & R
   }
 }
 
-type Coordinator = Row & { call_limit?: number; auto_assign?: number };
-const COORD_FIELDS = ["name", "mob_no", "full_name", "call_limit", "auto_assign"];
+type Coordinator = Row & { gender?: string; call_limit?: number; auto_assign?: number };
+const COORD_FIELDS = ["name", "mob_no", "full_name", "gender", "call_limit", "auto_assign"];
+/** Calls are never handed to women, whatever was selected (the app hides them too; this is the real rule). */
+const canReceiveCalls = (p: { gender?: string }) => p.gender !== "F";
+
+type PoolItem = { person: string; row?: Asg; attrs: Attrs };
+type PoolData = { items: PoolItem[]; coords: Coordinator[]; existing: Asg[] };
+
+/** The contacts a hand-out can draw from (before the admin's filters), with the values the filters look at. */
+async function loadPool(c: Ctx, a: AssignBody, extraField = ""): Promise<PoolData> {
+  if (!a.event) throw bad("Choose the event these calls are for.");
+  if (a.date_from && a.date_to && a.date_from > a.date_to) throw bad("The 'from' date is after the 'to' date.");
+  const erp = erpOf(c);
+  const needs = (list: "skill" | "interest") => extraField === list || [a.filters, ...a.groups.map((g) => g.filters)].some((fs) => fs.some((f) => f.field === list));
+  const multi = (list: "skill" | "interest") => needs(list)
+    ? erp.list<{ parent: string; id: string }>(MULTI[list].child, ["parent", `${MULTI[list].link} as id`], [["parenttype", "=", PERSON]], { parent: PERSON })
+    : Promise.resolve([] as { parent: string; id: string }[]);
+  const [people, existing, coords, skills, interests] = await Promise.all([
+    erp.list<Row>(PERSON, ["name", "college", "branch", "level", "gender", "occupation", "guide", "event_code", "attendance_count"], [["user_tag", "=", "Public"], ["is_active", "=", 1]], { order_by: "creation asc" }), // staff and "Not Interested" contacts are never called
+    erp.list<Asg>(ASG, ASG_FIELDS, [["event_code", "=", a.event]]),
+    erp.list<Coordinator>(PERSON, COORD_FIELDS, [["user_tag", "=", "Coordinator"], ["is_active", "=", 1]]),
+    multi("skill"), multi("interest"),
+  ]);
+  const ids = (rows: { parent: string; id: string }[]) => { const m = new Map<string, string[]>(); for (const r of rows) m.set(r.parent, [...(m.get(r.parent) ?? []), r.id]); return m; };
+  const sk = ids(skills), it = ids(interests);
+  const have = new Map(existing.map((e) => [e.person, e]));
+  const fromIds = new Set(a.all ? [] : coords.filter((p) => a.from.includes(p.mob_no)).map((p) => p.name));
+  const attrsOf = (p: Row): Attrs => ({
+    college: [p.college ?? ""], branch: [p.branch ?? ""], level: [p.level ?? ""], gender: [p.gender ?? ""], occupation: [p.occupation ?? ""],
+    guide: [p.guide ?? ""], reg_event: [p.event_code ?? ""], attended: [(p.attendance_count ?? 0) > 0 ? "yes" : "no"],
+    skill: sk.get(p.name) ?? [], interest: it.get(p.name) ?? [],
+  });
+  const items: PoolItem[] = [];
+  for (const p of people) {
+    const row = have.get(p.name);
+    let ok: boolean;
+    if (a.kind === "assign") ok = true; // everyone: an earlier hand-out is replaced, whether called or not
+    else if (a.kind === "followup") {
+      const day = (row?.submitted_at ?? "").slice(0, 10);
+      ok = !!row && a.statuses.includes(row.status) && (!(a.date_from || a.date_to) || !!day) && (!a.date_from || day >= a.date_from) && (!a.date_to || day <= a.date_to);
+    } else ok = row ? row.status === PENDING && (a.all || fromIds.has(row.coordinator)) : a.include_new;
+    if (ok) items.push({ person: p.name, row, attrs: attrsOf(p) });
+  }
+  return { items, coords, existing };
+}
+
+const GENDER_TITLE: Record<string, string> = { M: "Male", F: "Female" };
+/** Numbers only: how many of the matching contacts have each value of one field (never names). */
+app.post("/admin/assign/breakdown", async (c) => {
+  needAdmin(c);
+  const b = await body(c);
+  const a = assignBody(b);
+  const field = (POOL_FIELDS as readonly string[]).find((n) => n === b.field);
+  const base_ = Array.isArray(b.base_filters) ? parseFilters(b.base_filters) : null; // the filters that decide which values are listed (the caller leaves out the field's own)
+  const { items } = await loadPool(c, a, field ?? "");
+  const total = items.filter((i) => passes(i.attrs, a.filters)).length;
+  if (!field) return c.json({ total });
+  const base = items.filter((i) => passes(i.attrs, base_ ?? a.filters.filter((f) => f.field !== field)));
+  const count = new Map<string, number>();
+  for (const i of base) for (const v of new Set(i.attrs[field]?.length ? i.attrs[field] : [""])) count.set(v, (count.get(v) ?? 0) + 1);
+  const o = await loadOptions(c);
+  const titles = new Map<string, string>();
+  if (field === "college" || field === "branch" || field === "skill" || field === "interest") for (const x of o[field]) titles.set(x.id, x.title);
+  else if (field === "guide") for (const x of o.guide) titles.set(x.id, x.title);
+  else if (field === "reg_event") for (const e of await loadEvents(c)) titles.set(e.code, e.name);
+  else if (field === "gender") for (const k of Object.keys(GENDER_TITLE)) titles.set(k, GENDER_TITLE[k]!);
+  else if (field === "attended") { titles.set("yes", "Has attended"); titles.set("no", "Never attended"); }
+  const values = [...count].filter(([id]) => id !== "").map(([id, n]) => ({ id, title: titles.get(id) ?? id, count: n })).sort((x, y) => y.count - x.count || x.title.localeCompare(y.title));
+  return c.json({ field, total, base: base.length, empty: count.get("") ?? 0, values });
+});
 
 /** Works out who gets which contact. Writes nothing. */
 async function planAssign(c: Ctx, a: AssignBody) {
-  if (!a.event) throw bad("Choose the event these calls are for.");
-  if (a.scope === "followup" && !a.statuses.length) throw bad("Choose at least one call status.");
-  if (a.date_from && a.date_to && a.date_from > a.date_to) throw bad("The 'from' date is after the 'to' date.");
+  if (a.kind === "followup" && !a.statuses.length) throw bad("Choose at least one call status.");
+  if (a.kind === "move" && !a.all && !a.from.length) throw bad("Choose whose calls to move.");
   const erp = erpOf(c);
-  const needPool = a.scope === "new";
-  const f: Filters = [["user_tag", "=", "Public"], ["is_active", "=", 1]]; // staff and "Not Interested" contacts are never called
-  if (a.level) f.push(["level", "=", a.level]);
-  if (a.gender) f.push(["gender", "=", a.gender]);
-  if (a.reg_event) f.push(["event_code", "=", a.reg_event]);
-  if (a.attended === "yes") f.push(["attendance_count", ">", 0]);
-  if (a.attended === "no") f.push(["attendance_count", "=", 0]);
-  if (a.mobs.length) f.push(["mob_no", "in", a.mobs]);
-  const [pool, existing, coords] = await Promise.all([
-    needPool ? erp.list<{ name: string }>(PERSON, ["name"], f, { limit_page_length: 5000, order_by: "creation asc" }) : Promise.resolve([]),
-    erp.list<Asg>(ASG, ASG_FIELDS, [["event_code", "=", a.event]], { limit_page_length: 0 }),
-    erp.list<Coordinator>(PERSON, COORD_FIELDS, [["user_tag", "=", "Coordinator"], ["is_active", "=", 1]]),
-  ]);
-  const chosen = a.coordinators.length ? coords.filter((p) => a.coordinators.includes(p.mob_no)) : coords.filter((p) => p.auto_assign);
-  if (!chosen.length) throw bad("Choose at least one coordinator to give the calls to.");
-  const chosenIds = new Set(chosen.map((p) => p.name));
-  const fromIds = new Set(coords.filter((p) => a.from.includes(p.mob_no)).map((p) => p.name));
+  const { items: all, coords, existing } = await loadPool(c, a);
+  const byMob = new Map(coords.map((p) => [p.mob_no, p]));
   const nameOf = new Map(coords.map((p) => [p.name, p.full_name]));
-  const have = new Map(existing.map((e) => [e.person, e]));
+  const fromIds = new Set(a.all ? [] : coords.filter((p) => a.from.includes(p.mob_no)).map((p) => p.name));
+  const pool = all.filter((i) => passes(i.attrs, a.filters));
 
-  // The contacts to hand out.
-  let items: { person: string; row?: Asg }[];
-  let allow: string[] = []; // statuses of an existing assignment that may be overwritten (stops a call made in the meantime from being lost)
-  if (a.scope === "new") {
-    items = pool.filter((p) => !have.has(p.name)).map((p) => ({ person: p.name }));
-  } else if (a.scope === "others") {
-    allow = [PENDING];
-    // Only calls nobody has started, and never from the coordinators who are receiving.
-    const rows = existing.filter((e) => e.status === PENDING && !chosenIds.has(e.coordinator) && (!fromIds.size || fromIds.has(e.coordinator)));
-    if (a.limit && rows.length > a.limit) {
-      const by = new Map<string, Asg[]>();
-      for (const r of rows) by.set(r.coordinator, [...(by.get(r.coordinator) ?? []), r]);
-      items = takeFairly(by, a.limit).map((r) => ({ person: r.person, row: r }));
-    } else items = rows.map((r) => ({ person: r.person, row: r }));
-  } else {
-    allow = a.statuses;
-    const rows = existing.filter((e) => {
-      if (!a.statuses.includes(e.status)) return false;
-      if (fromIds.size && !fromIds.has(e.coordinator)) return false;
-      const day = (e.submitted_at ?? "").slice(0, 10);
-      if ((a.date_from || a.date_to) && !day) return false;
-      return (!a.date_from || day >= a.date_from) && (!a.date_to || day <= a.date_to);
-    });
-    items = rows.map((r) => ({ person: r.person, row: r }));
-  }
-  const candidates = items.length;
-  if (a.scope !== "others" && a.limit && items.length > a.limit) items = items.slice(0, a.limit);
-
-  // Who had them before (only needed for "same coordinator as before").
+  // Who had them before (only needed when a group says "same coordinator as before").
   const before = new Map<string, string>();
-  if (a.mode === "previous" && a.scope !== "others") {
-    if (a.scope === "followup") for (const i of items) before.set(i.person, i.row!.coordinator);
-    else {
+  const wantsBefore = [...a.groups, a.rest].some((g) => g.keep_previous);
+  if (wantsBefore) {
+    for (const i of pool) { if (i.row) before.set(i.person, i.row.coordinator); } // this event's current call first, then earlier events and calls
+    if (a.kind !== "followup") {
       const [earlier, logs] = await Promise.all([
-        erp.list<{ person: string; coordinator: string }>(ASG, ["person", "coordinator"], [["event_code", "!=", a.event]], { order_by: "assigned_at asc", limit_page_length: 0 }),
-        erp.list<{ person: string; coordinator: string }>(LOG, ["person", "coordinator"], [["coordinator", "!=", ""]], { order_by: "called_at asc", limit_page_length: 0 }),
+        erp.list<{ person: string; coordinator: string }>(ASG, ["person", "coordinator"], [["event_code", "!=", a.event]], { order_by: "assigned_at asc" }),
+        erp.list<{ person: string; coordinator: string }>(LOG, ["person", "coordinator"], [["coordinator", "!=", ""]], { order_by: "called_at asc" }),
       ]);
-      for (const r of logs) before.set(r.person, r.coordinator); // oldest first, so the newest wins
-      for (const r of earlier) before.set(r.person, r.coordinator); // an earlier assignment counts more than a single call
+      for (const r of logs) if (!before.has(r.person)) before.set(r.person, r.coordinator);
+      for (const r of earlier) if (!before.has(r.person)) before.set(r.person, r.coordinator);
     }
   }
 
-  const moving = new Set(items.map((i) => i.person));
-  const load = new Map<string, number>();
-  for (const e of existing) if (!moving.has(e.person)) load.set(e.coordinator, (load.get(e.coordinator) ?? 0) + 1);
-  const cs: Coord[] = shuffle(chosen).map((p) => ({ id: p.name, name: p.full_name, load: load.get(p.name) ?? 0, cap: p.call_limit || Infinity }));
-  const { given, left, added, kept } = distribute(shuffle(items), cs, (i) => before.get(i.person));
-
-  const groups = new Map<string, string[]>();
-  for (const g of given) groups.set(g.coordinator, [...(groups.get(g.coordinator) ?? []), g.item.person]);
+  const given = new Map<string, number>(); // coordinator -> contacts given so far in this plan, across all groups
+  const mins = new Map<string, number>();
+  const moves = new Map<string, string[]>();
   const taken = new Map<string, number>();
-  for (const g of given) if (g.item.row) taken.set(g.item.row.coordinator, (taken.get(g.item.row.coordinator) ?? 0) + 1);
+  let remaining = shuffle(pool);
+  const summary: { name: string; matched: number; given: number; left: number }[] = [];
+  const leftOver: PoolItem[] = [];
+  let leftByChoice = 0, kept = 0;
+
+  const run = (g: GroupIn, label: string, matched: PoolItem[]) => {
+    if (!matched.length) { summary.push({ name: label, matched: 0, given: 0, left: 0 }); return; }
+    if (g.leave) { leftByChoice += matched.length; summary.push({ name: label, matched: matched.length, given: 0, left: matched.length }); return; }
+    const members: Member[] = [];
+    for (const m of g.coordinators) {
+      const p = byMob.get(m.mob);
+      if (!p || !canReceiveCalls(p) || fromIds.has(p.name)) continue; // women, unknown people and the coordinators being emptied never receive
+      const max = m.max || Infinity;
+      members.push({ id: p.name, name: p.full_name, min: m.min, max });
+      mins.set(p.name, Math.max(mins.get(p.name) ?? 0, m.min));
+    }
+    if (!members.length) throw bad(`${label} has no coordinator to give the calls to. Women are never assigned calls.`);
+    const r = shareOut(matched, members, given, g.keep_previous ? (i) => before.get(i.person) : undefined);
+    for (const x of r.given) {
+      moves.set(x.coordinator, [...(moves.get(x.coordinator) ?? []), x.item.person]);
+      if (x.item.row) taken.set(x.item.row.coordinator, (taken.get(x.item.row.coordinator) ?? 0) + 1);
+    }
+    kept += r.kept;
+    leftOver.push(...r.left);
+    summary.push({ name: label, matched: matched.length, given: r.given.length, left: r.left.length });
+  };
+  a.groups.forEach((g, n) => {
+    const hit = remaining.filter((i) => passes(i.attrs, g.filters));
+    const gone = new Set(hit);
+    remaining = remaining.filter((i) => !gone.has(i)); // a contact that fits two groups goes to the first
+    run(g, `Group ${n + 1}`, hit);
+  });
+  run(a.rest, a.groups.length ? "Everyone else" : "All matching contacts", remaining);
+
+  const givenPeople = new Set([...moves.values()].flat());
+  // An earlier hand-out is replaced: its untouched calls that this plan does not use are removed afterwards (assign only).
+  const release = a.kind === "assign" ? existing.filter((e) => !givenPeople.has(e.person)).map((e) => e.name) : [];
+  const total = [...given.values()].reduce((s, n) => s + n, 0);
   return {
-    scope: a.scope, event: a.event, follow_up: a.scope === "followup", allow,
-    candidates, assignable: given.length, unassigned: left.length, kept_with_previous: kept, shared_out: given.length - kept,
-    per_coordinator: cs.map((x) => ({ id: x.id, name: x.name, add: added.get(x.id) ?? 0, total_after: x.load + (added.get(x.id) ?? 0), limit: Number.isFinite(x.cap) ? x.cap : null })),
+    kind: a.kind, event: a.event, follow_up: a.kind === "followup", allow: a.kind === "followup" ? a.statuses : a.kind === "assign" ? [...STATUSES] : [PENDING],
+    candidates: pool.length, assignable: total, leftover: leftOver.length, left_by_choice: leftByChoice, kept_with_previous: kept,
+    groups: summary,
+    per_coordinator: [...given].map(([id, n]) => {
+      const m = [...a.groups, a.rest].flatMap((g) => g.coordinators).find((x) => byMob.get(x.mob)?.name === id);
+      return { id, name: nameOf.get(id) ?? id, add: n, min: mins.get(id) ?? 0, max: m?.max || null, short: n < (mins.get(id) ?? 0) };
+    }).sort((x, y) => y.add - x.add),
     taken_from: [...taken].map(([id, n]) => ({ name: nameOf.get(id) ?? "Earlier system (imported)", count: n })).sort((x, y) => y.count - x.count),
-    moves: [...groups].map(([coordinator, persons]) => ({ coordinator, persons })),
+    release, replaced: release.length,
+    moves: [...moves].map(([coordinator, persons]) => ({ coordinator, persons })),
   };
 }
 
 app.post("/admin/assign/plan", async (c) => { needAdmin(c); return c.json(await planAssign(c, assignBody(await body(c)))); });
+
+/** How many contacts each group holds, which groups share contacts, and how many fit none. Numbers only; writes nothing. */
+app.post("/admin/assign/group-sizes", async (c) => {
+  needAdmin(c);
+  const a = assignBody(await body(c));
+  const { items } = await loadPool(c, a);
+  const pool = items.filter((i) => passes(i.attrs, a.filters));
+  const hit = a.groups.map((g) => pool.map((i) => g.filters.length > 0 && passes(i.attrs, g.filters)));
+  const sizes = hit.map((h) => h.filter(Boolean).length);
+  const overlaps: { a: number; b: number; count: number }[] = [];
+  for (let x = 0; x < hit.length; x++) for (let y = x + 1; y < hit.length; y++) {
+    const count = pool.filter((_, k) => hit[x]![k] && hit[y]![k]).length;
+    if (count) overlaps.push({ a: x, b: y, count });
+  }
+  const rest = pool.filter((_, k) => !hit.some((h) => h[k])).length;
+  return c.json({ pool: pool.length, sizes, overlaps, rest });
+});
+
+/** Removes earlier calls (called or not) that a new plan no longer uses. Only the assignment rows go: every call log stays. */
+app.post("/admin/assign/release", async (c) => {
+  needAdmin(c);
+  const b = await body(c);
+  const event = clean(b.event, 60);
+  const names = arr(b.names, 100);
+  if (!event) throw bad("Choose an event.");
+  if (!names.length) return c.json({ removed: 0 });
+  const erp = erpOf(c);
+  const rows = await erp.list<{ name: string }>(ASG, ["name"], [["name", "in", names], ["event_code", "=", event]]);
+  if (rows.length) await erp.call("POST", "/api/method/frappe.desk.reportview.delete_items", { items: JSON.stringify(rows.map((r) => r.name)), doctype: ASG });
+  return c.json({ removed: rows.length });
+});
 
 /**
  * Writes one batch of a plan (at most 100 contacts). Safe to repeat: contacts that already have a call row are updated, the rest
@@ -1188,11 +1528,11 @@ app.post("/admin/assign/apply", async (c) => {
   const erp = erpOf(c);
   const ids = [...new Set(pairs.map((p) => p.person))];
   const [coords, people, rows] = await Promise.all([
-    erp.list<{ name: string }>(PERSON, ["name"], [["name", "in", [...new Set(pairs.map((p) => p.coordinator))]], ["user_tag", "=", "Coordinator"], ["is_active", "=", 1]]),
+    erp.list<{ name: string; gender?: string }>(PERSON, ["name", "gender"], [["name", "in", [...new Set(pairs.map((p) => p.coordinator))]], ["user_tag", "=", "Coordinator"], ["is_active", "=", 1]]),
     erp.list<{ name: string }>(PERSON, ["name"], [["name", "in", ids], ["user_tag", "=", "Public"], ["is_active", "=", 1]]),
     erp.list<Asg>(ASG, ASG_FIELDS, [["event_code", "=", event], ["person", "in", ids]], { limit_page_length: 0 }),
   ]);
-  const okCoord = new Set(coords.map((x) => x.name));
+  const okCoord = new Set(coords.filter(canReceiveCalls).map((x) => x.name));
   const okPerson = new Set(people.map((x) => x.name));
   const have = new Map(rows.map((r) => [r.person, r]));
   const now = istNow();
@@ -1204,7 +1544,7 @@ app.post("/admin/assign/apply", async (c) => {
     if (!okCoord.has(p.coordinator) || !okPerson.has(p.person)) { skipped++; continue; }
     const row = have.get(p.person);
     if (!row) fresh.push({ doctype: ASG, person: p.person, coordinator: p.coordinator, event_code: event, status: PENDING, is_follow_up: follow ? 1 : 0, assigned_at: now });
-    else if (allow.includes(row.status || PENDING)) update.push({ name: row.name, coordinator: p.coordinator, status: PENDING, assigned_at: now, ...(follow && { is_follow_up: 1 }) });
+    else if (allow.includes(row.status || PENDING)) update.push({ name: row.name, coordinator: p.coordinator, status: PENDING, assigned_at: now, is_follow_up: follow ? 1 : 0 });
     else { skipped++; continue; }
     added.set(p.coordinator, (added.get(p.coordinator) ?? 0) + 1);
   }
@@ -1220,12 +1560,30 @@ app.post("/admin/assign/apply", async (c) => {
     }
   }
   await bulkUpdate(erp, ASG, update);
-  c.executionCtx.waitUntil(notifyAssigned(c, added).catch((e) => console.error("notifyAssigned", e)));
-  return c.json({ applied: fresh.length + update.length, skipped });
+  return c.json({ applied: fresh.length + update.length, skipped, added: Object.fromEntries(added) });
 });
 
-/** Called once by the app when a whole plan has been applied, so the activity log gets one line instead of one per batch. */
-app.post("/admin/assign/finish", (c) => { needAdmin(c); return c.json({ ok: true }); });
+/**
+ * Called once by the app when a whole plan has been applied (the plan is saved in many batches, so this is the one place to tell
+ * coordinators). `counts` is {coordinator id: contacts added}. Each coordinator gets exactly one notification.
+ */
+app.post("/admin/assign/finish", async (c) => {
+  needAdmin(c);
+  const b = await body(c);
+  const counts = new Map<string, number>();
+  if (b.counts && typeof b.counts === "object")
+    for (const [id, n] of Object.entries(b.counts as Record<string, unknown>).slice(0, 300)) { const k = Math.floor(Number(n)); if (k > 0) counts.set(id, k); }
+  const erp = erpOf(c);
+  const env = c.env;
+  c.executionCtx.waitUntil((async () => {
+    const people = await erp.list<{ name: string }>(PERSON, ["name"], [["name", "in", [...counts.keys()]], ["user_tag", "=", "Coordinator"], ["is_active", "=", 1]]);
+    for (const p of people) {
+      const n = counts.get(p.name) ?? 0;
+      await pushTo(env, erp, [p.name], "Contacts assigned to you", `${n} contact${n === 1 ? " is" : "s are"} assigned to you. Please call.`, { route: "/calls" });
+    }
+  })().catch((e) => console.error("notifyAssigned", e)));
+  return c.json({ ok: true });
+});
 
 /** Removes assignments nobody has called yet (optionally only one coordinator's). Contacts and call history are untouched. */
 app.post("/admin/assign/unassign", async (c) => {
@@ -1402,6 +1760,7 @@ app.get("/f/:slug", async (c) => {
     slug: link.name, title: link.title, type: link.link_type, eventName: events.find((e) => e.code === link.event_code)?.name ?? link.event_code,
     open: !!link.is_open, intro: link.intro ?? "", asks: { dinner: !!link.ask_dinner, transport: !!link.ask_transport, donation: !!link.ask_donation },
     slots: lines(link.slot_options), services: lines(link.service_options), genders: GENDER_LABELS, occupations: [...OCCUPATIONS],
+    colleges: (await loadOptions(c)).college.filter((o) => sameKey(o.title) !== sameKey(OTHERS)).map((o) => ({ value: o.id, label: o.title })),
   };
   return c.html(renderPage(cfg, nonce), 200, pageHeaders(nonce));
 });
@@ -1416,7 +1775,7 @@ app.post("/pub/:slug/lookup", async (c) => {
   if (!mob) throw bad("Please enter a valid 10-digit mobile number.");
   const erp = erpOf(c);
   const [p] = await erp.list<{ name: string; full_name: string; gender?: string; occupation?: string; profession?: string; venue?: string }>(
-    PERSON, ["name", "full_name", "gender", "occupation", "profession", "venue"], [["mob_no", "=", mob]], { limit_page_length: 1 });
+    PERSON, ["name", "full_name", "gender", "occupation", "college.title as profession", "venue"], [["mob_no", "=", mob]], { limit_page_length: 1 });
   if (!p) return c.json({ found: false });
   const reg = await erp.get(link.link_type === "Feedback" ? FB : REG, `${link.event_code}-${p.name}`);
   return c.json({ found: true, registered: !!reg, person: { name: p.full_name, gender: p.gender ?? "", occupation: p.occupation ?? "", profession: p.profession ?? "", venue: p.venue ?? "" } });
@@ -1462,7 +1821,7 @@ app.post("/pub/:slug/submit", async (c) => {
     if (!name) throw bad("Please enter your name.");
     if (!gender) throw bad("Please choose your gender.");
     const doc = {
-      mob_no: mob, full_name: name, gender, occupation: pick(b.occupation, OCCUPATIONS), profession: clean(b.profession), venue: clean(b.venue, 200),
+      mob_no: mob, full_name: name, gender, occupation: pick(b.occupation, OCCUPATIONS), college: (await publicCollege(c, b)) || undefined, venue: clean(b.venue, 200),
       event_code: link.event_code, user_tag: "Public", is_active: 1, registered_on: istToday(), registered_by: `Link: ${link.title}`.slice(0, 140),
     };
     try {
@@ -1706,6 +2065,13 @@ app.get("/admin/export/attendance", async (c) => {
   return csvResponse(c, "folk-attendance.csv", csv(ATT_COLS, rows));
 });
 
+const ASG_COLS = ["person_name", "person_mob", "coordinator_name", "event_code", "status", "note", "is_follow_up", "assigned_at", "submitted_at"];
+app.get("/admin/export/assignments", async (c) => {
+  needAdmin(c);
+  const rows = await erpOf(c).list<Record<string, unknown>>(ASG, ASG_COLS, rangeFilters(c.req.query(), "assigned_at"), { order_by: "assigned_at desc", limit_page_length: 0 });
+  return csvResponse(c, "folk-assigned-calls.csv", csv(ASG_COLS, rows));
+});
+
 const LOG_COLS = ["called_at", "person_name", "person_mob", "coordinator_name", "legacy_caller", "event_code", "status", "note"];
 app.get("/admin/export/calls", async (c) => {
   needAdmin(c);
@@ -1715,10 +2081,10 @@ app.get("/admin/export/calls", async (c) => {
 
 // ---------- admin: import contacts from a Google Form's response sheet (or a CSV file)
 const IMPORT_BATCH = 100; // rows saved per request: keeps every request small and fast
-const IMPORT_PERSON_FIELDS = ["name", "mob_no", "full_name", "gender", "level", "occupation", "profession", "pg_name", "venue", "gmap_link", "call_no", "fg_name", "fg_mob_no", "event_code", "user_tag"];
+const IMPORT_PERSON_FIELDS = ["name", "mob_no", "full_name", "gender", "level", "occupation", "college.title as profession", "pg.title as pg_name", "venue", "guide.title as guide", "event_code", "user_tag"];
 const ROW_TO_DOC: Record<string, keyof ImportRow> = {
   full_name: "name", gender: "gender", level: "level", occupation: "occupation", profession: "profession", pg_name: "pg_name", venue: "venue",
-  gmap_link: "gmap_link", call_no: "call_no", fg_name: "fg_name", fg_mob_no: "fg_mob", event_code: "event_code",
+  guide: "guide", event_code: "event_code",
 };
 
 async function importTable(b: Record<string, unknown>): Promise<string[][]> {
@@ -1753,10 +2119,12 @@ async function importPlan(c: Ctx, b: Record<string, unknown>) {
   const byKey = new Map<string, string>();
   for (const e of events) { byKey.set(e.code.toLowerCase(), e.code); byKey.set(e.name.toLowerCase(), e.code); }
   const defaultEvent = byKey.get(clean(b.event_code, 60).toLowerCase()) ?? "";
+  const guides = (await loadOptions(c)).guide;
   const built = buildRows(table, map, {
     defaultLevel: pick(b.default_level, LEVELS) || "Folk Foundation",
     normalizeMobile,
     knownEvent: (v) => byKey.get(v.toLowerCase()) ?? defaultEvent,
+    knownGuide: (v) => findTitle(guides, v)?.title ?? "",
   });
   return { table, map, built };
 }
@@ -1819,10 +2187,18 @@ app.post("/admin/import/commit", async (c) => {
   const old = await existingByMob(erp, batch.map((r) => r.mob));
   const result = { added: 0, updated: 0, skipped: 0, failed: 0 };
 
+  // College / Company is stored by ID: each typed name is matched to the list (or added) once per batch.
+  const collegeOf = new Map<string, string>();
+  for (const t of new Set(batch.map((r) => r.profession).filter(Boolean))) collegeOf.set(t, await optionId(c, "college", t));
+  const pgOf = new Map<string, string>();
+  for (const t of new Set(batch.map((r) => r.pg_name).filter(Boolean))) pgOf.set(t, await optionId(c, "pg", t));
+  const guideId = new Map((await loadOptions(c)).guide.map((g) => [g.title, g.id]));
+  const toDoc = (field: string, v: string): [string, unknown] =>
+    field === "profession" ? ["college", collegeOf.get(v) || null] : field === "pg_name" ? ["pg", pgOf.get(v) || null] : field === "guide" ? ["guide", guideId.get(v) || null] : [field, v];
   const fresh = batch.filter((r) => !old.has(r.mob));
   const docs = fresh.map((r) => ({
-    doctype: PERSON, mob_no: r.mob, full_name: r.name, gender: r.gender, level: r.level, occupation: r.occupation, profession: r.profession, pg_name: r.pg_name,
-    venue: r.venue, gmap_link: r.gmap_link, call_no: r.call_no, fg_name: r.fg_name, fg_mob_no: r.fg_mob, ...(r.event_code && { event_code: r.event_code }),
+    doctype: PERSON, mob_no: r.mob, full_name: r.name, gender: r.gender, level: r.level, occupation: r.occupation, college: collegeOf.get(r.profession) || undefined, pg: pgOf.get(r.pg_name) || undefined,
+    venue: r.venue, ...(guideId.get(r.guide) && { guide: guideId.get(r.guide) }), ...(r.event_code && { event_code: r.event_code }),
     user_tag: "Public", is_active: 1, registered_by: `Import (${s.name})`, registered_on: istToday(),
   }));
   if (docs.length) {
@@ -1844,7 +2220,7 @@ app.post("/admin/import/commit", async (c) => {
       if (o.user_tag && !CONTACT_TAGS.includes(String(o.user_tag))) { result.skipped++; continue; } // never change staff accounts through an import
       const ch = changesFor(o, r, policy);
       if (!ch.length) { result.skipped++; continue; }
-      edits.push({ doctype: PERSON, docname: String(o.name), ...Object.fromEntries(ch.map((x) => [x.field, x.to])) });
+      edits.push({ doctype: PERSON, docname: String(o.name), ...Object.fromEntries(ch.map((x) => toDoc(x.field, x.to))) });
     }
     if (edits.length) {
       try { const r = await erp.call("POST", "/api/method/frappe.client.bulk_update", { docs: JSON.stringify(edits) }); // Frappe expects the list as text
@@ -1895,10 +2271,29 @@ app.put("/admin/templates", async (c) => {
   return c.json({ templates: list });
 });
 
-/** Push notification to coordinators who just received contacts (real sending is added with Firebase). */
-async function notifyAssigned(_c: Ctx, added: Map<string, number>) {
-  for (const [id, n] of added) console.log(`assigned ${n} contact(s) to ${id}`);
-}
+// ---------- phone notifications: the app registers its Firebase token after sign-in and removes it on sign-out
+app.post("/devices", async (c) => {
+  staffOnly(c);
+  const s = c.get("session");
+  const token = clean((await body(c)).token, 400);
+  if (token.length < 20) throw bad("Invalid token.");
+  const erp = erpOf(c);
+  const key = token.slice(0, 140);
+  const [have] = await erp.list<{ name: string; person: string }>(DEVICE, ["name", "person"], [["token_key", "=", key]], { limit_page_length: 1 });
+  if (have) { if (have.person !== s.id) await erp.update(DEVICE, have.name, { person: s.id, token }); }
+  else {
+    try { await erp.insert(DEVICE, { token, token_key: key, person: s.id, platform: "android" }); }
+    catch (e) { if (!isDuplicate(e)) throw e; }
+  }
+  return c.json({ ok: true });
+});
+app.post("/devices/remove", async (c) => {
+  const s = c.get("session");
+  const token = clean((await body(c)).token, 400);
+  const erp = erpOf(c);
+  for (const d of await erp.list<{ name: string }>(DEVICE, ["name"], [["token_key", "=", token.slice(0, 140)], ["person", "=", s.id]])) await erp.remove(DEVICE, d.name);
+  return c.json({ ok: true });
+});
 
 // ---------- receipt printing: any phone sends a receipt to the shared queue; a phone connected to the printer prints it (see printHub.ts)
 export { PrintHub } from "./printHub";
@@ -1914,9 +2309,17 @@ app.post("/print/jobs", async (c) => {
   if (!mob) throw bad("Enter a valid 10-digit mobile number.");
   const ts = typeof b.ts === "string" && TS_RE.test(b.ts) ? b.ts : istNow();
   const count = Math.min(Math.max(Math.floor(Number(b.count)) || 0, 0), 9999);
-  const data = { name: clean(b.name), mob, event: clean(b.event, 100), ts, count, marked_by: s.name };
+  const guide = await guideOf(c, (await getRow(erpOf(c), mob))?.guide); // the receipt can print the FOLK guide's name and phone
+  const data = { name: clean(b.name), mob, event: clean(b.event, 100), ts, count, marked_by: s.name, guide: guide?.title ?? "", guide_mobile: guide?.mobile ?? "" };
   const r = await hubOf(c.env).fetch("https://hub/enqueue", { method: "POST", body: JSON.stringify({ key, data }) });
   return c.json({ queued: true, ...((await r.json()) as { stations: number }) });
+});
+
+/** How many phones are connected to a printer right now (the app shows it next to "Mark & Print Receipt"). */
+app.get("/print/status", async (c) => {
+  staffOnly(c);
+  const r = await hubOf(c.env).fetch("https://hub/status");
+  return c.json((await r.json()) as { stations: number });
 });
 
 /** The station connection is a WebSocket, so it is answered here (before the normal routes) after checking the sign-in. */
@@ -1929,9 +2332,26 @@ async function stationSocket(req: Request, env: Bindings): Promise<Response> {
   return hubOf(env).fetch(new Request("https://hub/station", req));
 }
 
+
+/**
+ * Friday 6:30 pm India time (cron 13:00 UTC): if no contacts were assigned today, remind every admin to assign calls.
+ * Calls are made and assigned on Fridays, so one reminder per Friday is all that is needed.
+ */
+async function fridayReminder(env: Bindings) {
+  const erp = new Erp(env);
+  const today = istToday();
+  const done = await erp.count(ASG, [["assigned_at", ">=", `${today} 00:00:00`]]);
+  if (done > 0) return;
+  const admins = await erp.list<{ name: string }>(PERSON, ["name"], [["user_tag", "=", "Admin"], ["is_active", "=", 1]]);
+  await pushTo(env, erp, admins.map((a) => a.name), "Assign calls", "No contacts have been assigned for calling today. Please assign them now.", { route: "/admin" });
+}
+
 export default {
   fetch(req: Request, env: Bindings, ctx: ExecutionContext): Response | Promise<Response> {
     if (req.headers.get("Upgrade") === "websocket" && new URL(req.url).pathname === "/print/station") return stationSocket(req, env);
     return app.fetch(req, env, ctx);
+  },
+  scheduled(_e: ScheduledController, env: Bindings, ctx: ExecutionContext) {
+    ctx.waitUntil(fridayReminder(env).catch((e) => console.error("fridayReminder", e)));
   },
 };

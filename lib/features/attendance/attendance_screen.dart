@@ -15,6 +15,7 @@ import '../../core/util.dart';
 import '../../core/widgets.dart';
 import '../auth/auth_controller.dart';
 import '../printing/printer_service.dart';
+import '../printing/printer_status.dart';
 import '../printing/printer_sheet.dart';
 import '../printing/receipt_format.dart';
 import '../printing/receipt_renderer.dart';
@@ -173,11 +174,6 @@ class _AttendanceScreenState extends ConsumerState<AttendanceScreen> with Widget
     if (isNew && !_formKey.currentState!.validate()) return;
     _busyN.value = true;
     try {
-      // Printer first, so a receipt button never marks someone and then has nowhere to print.
-      if (print && !await ensurePrinter(context, ref.read(printerServiceProvider))) {
-        if (mounted) showMessage(context, 'Printer not connected. Nothing was marked.', error: true);
-        return;
-      }
       final f = _form.toJson();
       final label = _person?.name ?? _form.name.text.trim();
       final r = await ref
@@ -206,6 +202,7 @@ class _AttendanceScreenState extends ConsumerState<AttendanceScreen> with Widget
         showMessage(context, printed == null ? base : '$base. $printed');
       }
       ref.invalidate(todayProvider(event));
+      ref.invalidate(printStationsProvider);
       _reset();
     } on ApiException catch (e) {
       if (mounted) showMessage(context, e.message, error: true);
@@ -239,6 +236,8 @@ class _AttendanceScreenState extends ConsumerState<AttendanceScreen> with Widget
       // A fresh check-in adds one to the count read before marking; "already" is counted in it.
       count: r.status == 'already' ? countBefore : countBefore + 1,
       markedBy: ref.read(authProvider).value?.name ?? '',
+      guide: r.guide,
+      guideMobile: r.guideMobile,
     );
     if (!kIsWeb && await printer.isConnected) {
       final image = await renderReceipt(boot?.receipt ?? const ReceiptFormat(), data);
@@ -435,21 +434,13 @@ class _AttendanceScreenState extends ConsumerState<AttendanceScreen> with Widget
                     if (p!.level.isNotEmpty) p.level,
                     'Attended ${p.attendanceCount} time${p.attendanceCount == 1 ? '' : 's'}',
                     if (p.lastAttendedOn.isNotEmpty) 'last on ${p.lastAttendedOn}',
-                    if (p.folkGuide.isNotEmpty) 'Guide: ${p.folkGuide}',
+                    if (p.guide.isNotEmpty) 'Guide: ${p.guide}',
                   ].join('  •  '),
                   style: text.bodyMedium,
                 ),
               ),
-            if (isNew)
-              Padding(
-                padding: const EdgeInsets.only(top: 4),
-                child: Text('Fill the details to register and mark present in one step.', style: text.bodyMedium),
-              ),
             const SizedBox(height: 14),
-            if (_offlinePerson)
-              Text('Offline: this check-in will be saved on your phone and sent automatically.', style: text.bodyMedium)
-            else if (isNew)
-              PersonFields(form: _form, boot: boot),
+            if (_offlinePerson) Text('Offline: will be sent later', style: text.bodyMedium) else if (isNew) PersonFields(form: _form, boot: boot),
             const SizedBox(height: 12),
             FilledButton.icon(
               onPressed: _busyN.value ? null : () => _mark(isNew: isNew),
@@ -467,6 +458,8 @@ class _AttendanceScreenState extends ConsumerState<AttendanceScreen> with Widget
                 icon: const Icon(Icons.print_outlined),
                 label: Text(isNew ? 'Register, Mark & Print Receipt' : 'Mark & Print Receipt'),
               ),
+              const SizedBox(height: kGapS),
+              const PrinterStatusChip(),
             ],
           ],
         ),
@@ -493,7 +486,6 @@ class _SearchBox extends StatelessWidget {
     enableSuggestions: false, // suggestions and autocorrect on the keyboard cause lag and swallowed keystrokes
     decoration: InputDecoration(
       labelText: 'Mobile number or name',
-      hintText: 'Type 3+ digits or letters',
       prefixIcon: const Icon(Icons.search_rounded),
       suffixIcon: ListenableBuilder(
         listenable: Listenable.merge([controller, searching]),

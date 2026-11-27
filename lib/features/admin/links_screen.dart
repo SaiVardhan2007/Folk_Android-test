@@ -54,11 +54,6 @@ class LinksScreen extends ConsumerWidget {
             label: const Text('New link'),
           ),
           const SizedBox(height: kGapS),
-          Text(
-            'Every event already has a Register link and a Feedback link. Add more here, for example a volunteer link, or a link assigned to a person '
-            'so you can see who brings in registrations.',
-            style: text.bodyMedium,
-          ),
           const SizedBox(height: kGapM),
           links.when(
             loading: () => const Padding(
@@ -211,9 +206,7 @@ class _LinkSheetState extends ConsumerState<_LinkSheet> {
                 inputFormatters: [FilteringTextInputFormatter.allow(RegExp(r'[0-9+ \-]')), LengthLimitingTextInputFormatter(15)],
                 decoration: InputDecoration(
                   labelText: 'Assign to (mobile number, optional)',
-                  helperText: _editing && current.isNotEmpty && !_clearAssigned
-                      ? 'Now: $current. Leave empty to keep.'
-                      : 'A coordinator, volunteer or anyone in FOLK',
+                  helperText: _editing && current.isNotEmpty && !_clearAssigned ? 'Now: $current' : null,
                   prefixIcon: const Icon(Icons.person_pin_outlined),
                   suffixIcon: _editing && current.isNotEmpty
                       ? IconButton(

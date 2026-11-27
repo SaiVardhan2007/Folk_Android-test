@@ -48,9 +48,16 @@ class AdminRepo {
       _api.post('/admin/assign/plan', body: body, timeout: const Duration(seconds: 60));
   Future<Map<String, dynamic>> applyAssign(Map<String, dynamic> body) =>
       _api.post('/admin/assign/apply', body: body, timeout: const Duration(seconds: 90));
+
+  /// Counts only, never names. Without `field` it returns just the number of matching contacts.
+  Future<Map<String, dynamic>> assignBreakdown(Map<String, dynamic> body) =>
+      _api.post('/admin/assign/breakdown', body: body, timeout: const Duration(seconds: 60));
+  Future<Map<String, dynamic>> assignGroupSizes(Map<String, dynamic> body) =>
+      _api.post('/admin/assign/group-sizes', body: body, timeout: const Duration(seconds: 60));
+  Future<int> releaseAssign(String event, List<String> names) async =>
+      ((await _api.post('/admin/assign/release', body: {'event': event, 'names': names}, timeout: const Duration(seconds: 90)))['removed'] as num)
+          .toInt();
   Future<void> finishAssign(Map<String, dynamic> body) => _api.post('/admin/assign/finish', body: body);
-  Future<int> unassign(String event, {String? coordinatorMob}) async =>
-      ((await _api.post('/admin/assign/unassign', body: {'event': event, 'coordinator': coordinatorMob}))['removed'] as num).toInt();
   Future<Map<String, dynamic>> eventSummary(String code) => _api.get('/admin/events/${Uri.encodeComponent(code)}/summary');
   Future<Map<String, dynamic>> callStats(String event) => _api.get('/admin/calls/stats', query: {'event': event});
   Future<List<Map<String, dynamic>>> templates() async =>
@@ -94,6 +101,21 @@ class AdminRepo {
         subject: fileName,
       ),
     );
+  }
+
+  /// Downloads several CSV files and opens one share sheet with all of them.
+  Future<void> shareCsvs(List<({String path, String name, Map<String, dynamic>? query})> items) async {
+    final files = <XFile>[];
+    for (final i in items) {
+      files.add(
+        XFile.fromData(
+          utf8.encode(await _api.getText(i.path, query: i.query)),
+          mimeType: 'text/csv',
+          name: i.name,
+        ),
+      );
+    }
+    await SharePlus.instance.share(ShareParams(files: files, fileNameOverrides: [for (final i in items) i.name]));
   }
 }
 

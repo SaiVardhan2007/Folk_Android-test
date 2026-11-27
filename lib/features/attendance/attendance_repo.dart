@@ -11,9 +11,20 @@ import '../../core/util.dart';
 const _queueKey = 'folk_offline_queue';
 
 class MarkResult {
-  const MarkResult({required this.status, required this.name, required this.ts, this.registered = false, this.queued = false});
+  const MarkResult({
+    required this.status,
+    required this.name,
+    required this.ts,
+    this.registered = false,
+    this.queued = false,
+    this.guide = '',
+    this.guideMobile = '',
+  });
   final String status; // marked | already | queued
   final String name;
+
+  /// The person's FOLK guide and the guide's phone (for the receipt).
+  final String guide, guideMobile;
 
   /// When the check-in happened (India time). For "already" it is this phone's time, so look the real one up.
   final String ts;
@@ -73,7 +84,14 @@ class AttendanceRepo {
     final body = {'mob': mob, 'event': event, 'ts': ts, 'edits': ?edits, ...?register};
     try {
       final r = await _api.post('/attendance', body: body);
-      return MarkResult(status: r['status'] as String, name: r['name'] as String? ?? label, ts: ts, registered: r['registered'] == true);
+      return MarkResult(
+        status: r['status'] as String,
+        name: r['name'] as String? ?? label,
+        ts: ts,
+        registered: r['registered'] == true,
+        guide: r['guide'] as String? ?? '',
+        guideMobile: r['guide_mobile'] as String? ?? '',
+      );
     } on ApiException catch (e) {
       // Queued only when an admin has turned the offline queue on, and only for registered people (a new person needs the server to confirm the details).
       if (allowQueue && e.isNetwork && register == null) {

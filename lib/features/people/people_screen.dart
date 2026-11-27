@@ -226,7 +226,7 @@ class _PeopleScreenState extends ConsumerState<PeopleScreen> with AutomaticKeepA
               plain(_cCompany, p.profession),
               plain(_cPg, p.pgName),
               plain(_cStay, p.currentStay),
-              plain(_cGuide, p.folkGuide),
+              plain(_cGuide, p.guide),
               cell(_cCalls, _count(p.callsCount, () => _history(p, calls: true))),
               cell(_cSessions, _count(p.attendanceCount, () => _history(p, calls: false))),
               plain(_cLast, p.lastAttendedOn),
@@ -275,10 +275,7 @@ class _PeopleScreenState extends ConsumerState<PeopleScreen> with AutomaticKeepA
                 ],
               ),
               const SizedBox(height: 10),
-              Text(
-                '$_total ${_total == 1 ? 'person' : 'people'}  •  ${_sorts[_filters['sort']] ?? ''}  •  tap a row to edit',
-                style: text.bodyMedium,
-              ),
+              Text('$_total ${_total == 1 ? 'person' : 'people'}  •  ${_sorts[_filters['sort']] ?? ''}', style: text.bodyMedium),
               const SizedBox(height: 8),
               if (_error != null) ErrorView(message: _error!, onRetry: () => _load(reset: true)),
             ],
@@ -441,9 +438,7 @@ class _EditSheet extends ConsumerStatefulWidget {
 class _EditSheetState extends ConsumerState<_EditSheet> {
   final _form = PersonFormController();
   late final _mob = TextEditingController(text: widget.person.mob);
-  late final _guide = TextEditingController(text: widget.person.folkGuide);
   late final _venue = TextEditingController(text: widget.person.venue);
-  late final _map = TextEditingController(text: widget.person.gmapLink);
   late String _tag = widget.person.tag;
   late bool _active = widget.person.isActive;
   bool _busy = false;
@@ -458,9 +453,7 @@ class _EditSheetState extends ConsumerState<_EditSheet> {
   void dispose() {
     _form.dispose();
     _mob.dispose();
-    _guide.dispose();
     _venue.dispose();
-    _map.dispose();
     super.dispose();
   }
 
@@ -476,11 +469,8 @@ class _EditSheetState extends ConsumerState<_EditSheet> {
       await repo.updatePerson(p.mob, {
         ..._form.toJson(),
         // A cleared number box means "none"; the shared form leaves these out when empty.
-        'age': int.tryParse(_form.age.text.trim()) ?? 0,
         'chanting_rounds': int.tryParse(_form.chanting.text.trim()) ?? 0,
-        'folk_guide': _guide.text.trim(),
         'venue': _venue.text.trim(),
-        'gmap_link': _map.text.trim(),
         if (_mob.text.trim() != p.mob) 'new_mob': _mob.text.trim(),
       });
       final mob = _mob.text.trim().isEmpty ? p.mob : _mob.text.trim();
@@ -522,7 +512,7 @@ class _EditSheetState extends ConsumerState<_EditSheet> {
               keyboardType: TextInputType.phone,
               enabled: !locked,
               inputFormatters: [FilteringTextInputFormatter.allow(RegExp(r'[0-9+ \-]')), LengthLimitingTextInputFormatter(15)],
-              decoration: const InputDecoration(labelText: 'Mobile', helperText: 'Also how they sign in', prefixIcon: Icon(Icons.phone_android)),
+              decoration: const InputDecoration(labelText: 'Mobile', prefixIcon: Icon(Icons.phone_android)),
             ),
             OptionDropdown(
               label: 'Role',
@@ -540,17 +530,8 @@ class _EditSheetState extends ConsumerState<_EditSheet> {
         FieldGrid(
           children: [
             TextField(
-              controller: _guide,
-              decoration: const InputDecoration(labelText: 'FOLK Guide (code)', prefixIcon: Icon(Icons.badge_outlined)),
-            ),
-            TextField(
               controller: _venue,
               decoration: const InputDecoration(labelText: 'Venue', prefixIcon: Icon(Icons.place_outlined)),
-            ),
-            TextField(
-              controller: _map,
-              keyboardType: TextInputType.url,
-              decoration: const InputDecoration(labelText: 'Map link', prefixIcon: Icon(Icons.map_outlined)),
             ),
           ],
         ),
@@ -559,7 +540,7 @@ class _EditSheetState extends ConsumerState<_EditSheet> {
           value: _active,
           onChanged: locked ? null : (v) => setState(() => _active = v),
           title: Text(p.isPending && !_active ? 'Approve this account' : 'Account enabled'),
-          subtitle: locked ? const Text('This is your own account: you can\'t change your role or disable it here.') : null,
+          subtitle: locked ? const Text('Your own account') : null,
         ),
         const SizedBox(height: kGapS),
         FilledButton.icon(
